@@ -1,0 +1,237 @@
+.nexus-logo {
+  font-size: 2rem;
+  font-weight: 700;
+  font-family: "cursive";
+  background: linear-gradient(135deg, #6e00ff, #95c2d3);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  position: relative;
+  cursor: pointer;
+}
+
+.formBgColor {
+  background-color: #ffe9d1;
+}
+
+.passwordEyes {
+  position: absolute;
+  top: 35px;
+  right: 15px;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.bgTheme {
+  background-color: #5e35b1 !important;
+}
+
+.bgTheme.btn:hover {
+  cursor: pointer;
+  background: lavender !important;
+  border-color: #5e35b1 !important;
+  color: #5e35b1 !important;
+}
+
+.btnThemeOutline {
+  background-color: rgb(249, 249, 255) !important;
+  border: 1px solid #5e35b1 !important;
+  color: #5e35b1 !important;
+  cursor: pointer;
+}
+
+.btnThemeOutline:hover {
+  background-color: rgba(94, 53, 177, 0.08) !important;
+}
+
+.textTheme {
+  color: #5e35b1 !important;
+}
+
+
+.borderTheme {
+  border: 1px solid #5e35b1;
+}
+
+.borderTheme-b {
+  border-bottom: 1px solid #5e35b1;
+}
+
+.borderTheme-t {
+  border-top: 1px solid #5e35b1;
+}
+
+.borderTheme-r {
+  border-right: 1px solid #5e35b1;
+}
+
+.borderTheme-l {
+  border-left: 1px solid #5e35b1;
+}
+
+.schoolBoyAnimation {
+  height: 150px;
+  width: 150px;
+}
+
+.btn-theme {
+  border: 1px solid #5e35b1;
+  color: #5e35b1;
+  background: transparent;
+  transition: all 0.3s ease;
+}
+
+.btn-theme:hover {
+  background: #5e35b1;
+  color: white;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+@media (prefers-color-scheme: dark) {
+  .react-calendar {
+    background: #1f2937 !important; /* gray-800 */
+    color: #f3f4f6 !important; /* gray-100 */
+    border: none !important;
+  }
+
+  .react-calendar__navigation button:enabled:hover,
+  .react-calendar__navigation button:enabled:focus {
+    background-color: #374151 !important; /* gray-700 */
+    color: #f3f4f6 !important;
+  }
+
+  .react-calendar__month-view__weekdays {
+    background-color: #374151 !important; /* gray-700 */
+  }
+
+  .react-calendar__month-view__weekdays__weekday abbr {
+    color: #d1d5db !important; /* gray-300 */
+    text-decoration: none !important;
+  }
+
+  .react-calendar__tile:enabled:hover,
+  .react-calendar__tile:enabled:focus {
+    background-color: #374151 !important; /* gray-700 */
+    color: #f3f4f6 !important;
+  }
+
+  .react-calendar__tile--now {
+    background-color: #374151 !important;
+    color: #60a5fa !important; /* blue-400 */
+  }
+
+  .react-calendar__navigation__label__labelText {
+    color: #f3f4f6 !important;
+  }
+
+  .react-calendar__navigation button {
+    color: #f3f4f6 !important;
+  }
+}
+
+.apexcharts-canvas .apexcharts-svg .apexcharts-yaxis-texts-g .apexcharts-text,
+.apexcharts-canvas .apexcharts-svg .apexcharts-xaxis-texts-g .apexcharts-text {
+  fill: #5e35b1 !important;
+}
+
+.custom-select .arrow {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: 0.8em;
+  color: #333;
+}
+
+.logoImg {
+  height: 50px;
+  width: 50px;
+}
+
+/* Receipt Specific Styles */
+.receipt-container {
+  max-width: 36rem; /* max-w-xl */
+  margin-left: auto;
+  margin-right: auto;
+  border: 1px solid #d1d5db;
+  padding: 1.5rem;
+  background-color: #ffffff;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  width: 100%;
+}
+
+.receipt-header-title {
+  color: #5e35b1; /* Matching your theme */
+  font-size: 1.25rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.receipt-table {
+  width: 100%;
+  font-size: 0.875rem;
+  border-collapse: collapse;
+  border: 1px solid #9ca3af;
+}
+
+.receipt-table th {
+  background-color: #f3f4f6;
+  border: 1px solid #9ca3af;
+  padding: 0.5rem;
+  text-align: left;
+}
+
+.receipt-table td {
+  border: 1px solid #9ca3af;
+  padding: 0.5rem;
+}
+
+.receipt-table-row-gray {
+  background-color: #f9fafb;
+}
+
+.receipt-table-footer {
+  background-color: #f3f4f6;
+  font-weight: 600;
+}
+
+.text-red-important {
+  color: #dc2626 !important;
+  font-weight: 600;
+}
+
+.mainLogo {
+  height: 70px;
+  width: 80px;
+  animation: logoFloat 1s ease-in-out infinite;
+  cursor: pointer;
+}
+
+@keyframes logoFloat {
+  0% {
+    transform: scale(1) rotate(0deg);
+  }
+
+  25% {
+    transform: scale(1.2) rotate(-4deg); /* rotate LEFT */
+  }
+
+  75% {
+    transform: scale(1.2) rotate(4deg); /* rotate RIGHT */
+  }
+
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+
