@@ -1,7 +1,8 @@
 export const constants = {
   isOnline: true,
   // isOffline: true,
-  baseUrl: "https://api.newprogressive.in", //deployed for school newprogressive PRODUCTION
+  //baseUrl: "https://api.newprogressive.in", //deployed for school newprogressive PRODUCTION
+  baseUrl: "https://api.lgsschool.eduethical.com/", // updated this base url for LGS School production server 03Sep26 at 06:48 PM
   // baseUrl: "https://smsproject1.pythonanywhere.com/", //deployed for testing
   // baseUrl: "https://smsproject.pythonanywhere.com/", //deployed for school NPEPS deployed
 //  baseUrl: "https://newprogressive.pythonanywhere.com/", //deployed for school newprogressive testing
