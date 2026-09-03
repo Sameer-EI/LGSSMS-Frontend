@@ -1,4 +1,5 @@
 import React from "react";
+import { schoolConfig } from "../../config/schoolConfig";
 
 const PrivacyPolicy = () => {
   return (
@@ -6,11 +7,11 @@ const PrivacyPolicy = () => {
       <div className="max-w-7xl mx-auto bg-white dark:bg-gray-800 shadow-lg rounded-lg p-6">
         {/* 1. Privacy Policy */}
         <h1 className="text-3xl font-bold mb-4 textTheme">
-          Privacy Policy – New Progressive Education Public School (NPEPS)
+          Privacy Policy – {schoolConfig.schoolName}
         </h1>
 
         <p className="mb-4">
-          At <strong>New Progressive Education Public School (NPEPS)</strong>,
+          At <strong>{schoolConfig.schoolName}</strong>,
           we are committed to protecting the privacy and personal information of
           students, parents, staff, and visitors. This Privacy Policy explains
           how we collect, use, and safeguard your information when you visit our
@@ -65,7 +66,7 @@ const PrivacyPolicy = () => {
           Changes to the Privacy Policy
         </h2>
         <p className="mb-6">
-          NPEPS reserves the right to update this policy at any time. Any
+          {schoolConfig.schoolName} reserves the right to update this policy at any time. Any
           changes will be posted on this page.
         </p>
 
@@ -77,7 +78,7 @@ const PrivacyPolicy = () => {
         </h1>
 
         <p className="mb-4">
-          By accessing and using the NPEPS website, you agree to comply with the
+          By accessing and using the {schoolConfig.schoolName} website, you agree to comply with the
           following terms and conditions.
         </p>
 
@@ -93,7 +94,7 @@ const PrivacyPolicy = () => {
         </h2>
         <ul className="list-disc list-inside mb-4">
           <li>Information may not always be up to date</li>
-          <li>NPEPS may modify content without prior notice</li>
+          <li>{schoolConfig.schoolName} may modify content without prior notice</li>
         </ul>
 
         <h2 className="text-xl font-semibold mb-2 textTheme">
@@ -101,14 +102,14 @@ const PrivacyPolicy = () => {
         </h2>
         <p className="mb-4">
           All website content including text, images, logos, and designs are the
-          property of NPEPS. Reuse without written permission is prohibited.
+          property of {schoolConfig.schoolName}. Reuse without written permission is prohibited.
         </p>
 
         <h2 className="text-xl font-semibold mb-6 textTheme">
           Limitation of Liability
         </h2>
         <p className="mb-6">
-          The school shall not be held liable for any direct or indirect damages
+          {schoolConfig.schoolName} shall not be held liable for any direct or indirect damages
           arising from website usage.
         </p>
 
@@ -120,31 +121,33 @@ const PrivacyPolicy = () => {
         </h1>
 
         <p className="mb-2">
-          <strong>School Name:</strong> New Progressive Education Public School
+          <strong>School Name:</strong> {schoolConfig.schoolName}
         </p>
         <p className="mb-2">
-          <strong>Address:</strong> 10, Prince Colony, Lower Idgah Hills, Bhopal
+          <strong>Address:</strong> {schoolConfig.schoolAddress}
         </p>
         <p className="mb-2">
-          <strong>Phone Number:</strong> 0755-2538456
+          <strong>Phone Number:</strong> {schoolConfig.schoolPhone}
         </p>
         <p className="mb-2">
           <strong>Email ID:</strong>{" "}
-          <a href="mailto:shezikk@gmail.com" className="textTheme underline">
-            shezikk@gmail.com
+          <a href={`mailto:${schoolConfig.schoolEmail}`} className="textTheme underline">
+            {schoolConfig.schoolEmail}
           </a>
         </p>
-        <p className="mb-6">
-          <strong>Google Maps:</strong>{" "}
-          <a
-            href="https://maps.app.goo.gl/p2AoRMnK46h5UrSy9"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="textTheme underline"
-          >
-            View Location
-          </a>
-        </p>
+        {schoolConfig.googleMapsLink && (
+          <p className="mb-6">
+            <strong>Location:</strong>{" "}
+            <a
+              href={schoolConfig.googleMapsLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="textTheme underline"
+            >
+              View on Google Maps
+            </a>
+          </p>
+        )}
 
         <hr className="my-6" />
 
