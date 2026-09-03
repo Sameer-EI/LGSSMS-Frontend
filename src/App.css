@@ -211,7 +211,9 @@
 
 .mainLogo {
   height: 70px;
-  width: 80px;
+  width: auto;
+  max-width: 120px;
   cursor: pointer;
+  object-fit: contain;
+  flex-shrink: 0;
 }
-
