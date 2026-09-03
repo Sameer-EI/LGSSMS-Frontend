@@ -165,15 +165,6 @@ export const Login = () => {
                 <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center shadow-md">
                   <i className="fa-solid fa-school text-white text-xl"></i>
                 </div>
-
-                <div className="text-left">
-                  <h2 className="text-lg font-bold">
-                    New Progressive
-                  </h2>
-                  <h2 className="text-lg font-bold">
-                    Education Public School
-                  </h2>
-                </div>
               </div>
             </div>
 
