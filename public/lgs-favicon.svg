@@ -2,8 +2,8 @@
   <!-- Purple background circle -->
   <circle cx="50" cy="50" r="50" fill="#5E35B1"/>
   
-  <!-- White "LGS" text -->
-  <text x="50" y="65" font-size="55" font-weight="bold" text-anchor="middle" fill="white" font-family="Arial, sans-serif">LGS</text>
+  <!-- White "LGS" text with better positioning and sizing -->
+  <text x="50" y="62" font-size="48" font-weight="bold" text-anchor="middle" dominant-baseline="middle" fill="white" font-family="Arial, sans-serif" letter-spacing="2">LGS</text>
   
   <!-- Subtle border -->
   <circle cx="50" cy="50" r="50" fill="none" stroke="#4527A0" stroke-width="1"/>
