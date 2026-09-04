@@ -4,21 +4,37 @@
       <stop offset="0" stop-color="#6A1B9A" />
       <stop offset="1" stop-color="#5E35B1" />
     </linearGradient>
-    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="8" result="b" />
-      <feBlend in="SourceGraphic" in2="b" mode="normal" />
-    </filter>
   </defs>
 
-  <!-- Purple circular background -->
+  <!-- Background circle -->
   <circle cx="512" cy="512" r="500" fill="url(#g)" />
 
-  <!-- Slight subtle darker rim -->
-  <circle cx="512" cy="512" r="500" fill="none" stroke="#4527A0" stroke-opacity="0.12" stroke-width="10" />
+  <!-- Outlined letters drawn as shapes (no fonts) so rendering is consistent across browsers -->
+  <g transform="translate(512,512)">
+    <!-- L -->
+    <rect x="-460" y="-220" width="80" height="440" fill="#fff" rx="8" />
+    <rect x="-460" y="160" width="240" height="80" fill="#fff" rx="8" />
 
-  <!-- White LGS text, centered both horizontally and vertically -->
-  <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-weight="700" font-size="420" letter-spacing="10">LGS</text>
+    <!-- G (ring + cut + arm) -->
+    <path fill="#fff" fill-rule="evenodd" d="M-80,-220
+      a220,220 0 1,0 0,440
+      a220,220 0 1,0 0,-440
+      M-80,-140
+      a140,140 0 1,1 0,280
+      a140,140 0 1,1 0,-280Z" />
+    <!-- G arm (inner horizontal) -->
+    <rect x="40" y="-40" width="120" height="80" fill="#fff" rx="8" />
 
-  <!-- Make edges crisper on small sizes -->
-  <rect x="0" y="0" width="1024" height="1024" fill="none" />
+    <!-- S (approximated with a filled path) -->
+    <path fill="#fff" d="M300,-180
+      C220,-320 60,-320 60,-160
+      C60,-80 200,-60 160,20
+      C120,100 -20,120 -60,20
+      C-100,-80 40,-140 120,-160
+      C200,-180 240,-100 300,-60
+      C360,-20 360,60 300,160
+      C240,260 80,260 20,160
+      C-40,60 40,20 100,0
+      C160,-20 240,-40 300,-180Z" />
+  </g>
 </svg>
