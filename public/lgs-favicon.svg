@@ -16,8 +16,8 @@
   <!-- Slight subtle darker rim -->
   <circle cx="512" cy="512" r="500" fill="none" stroke="#4527A0" stroke-opacity="0.12" stroke-width="10" />
 
-  <!-- White LGS text, centered -->
-  <text x="50%" y="56%" text-anchor="middle" fill="#fff" font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-weight="700" font-size="420" letter-spacing="10">LGS</text>
+  <!-- White LGS text, centered both horizontally and vertically -->
+  <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-weight="700" font-size="420" letter-spacing="10">LGS</text>
 
   <!-- Make edges crisper on small sizes -->
   <rect x="0" y="0" width="1024" height="1024" fill="none" />
