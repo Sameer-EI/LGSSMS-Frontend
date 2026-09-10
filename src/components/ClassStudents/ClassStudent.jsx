@@ -112,7 +112,7 @@ export const ClassStudent = () => {
       else if (attendanceStatus === "absent") payload.A = selectedStudents;
       else if (attendanceStatus === "leave") payload.L = selectedStudents;
 
-      await axios.post(`${BASE_URL}/a/multiple-attendance/`, payload);
+      await axios.post(`${BASE_URL}/a/student-attendance/`, payload);
 
       setSelectedStudents([]);
       setShowModal(false);
@@ -152,7 +152,7 @@ export const ClassStudent = () => {
       else if (status === "absent") payload.A = [studentId];
       else if (status === "leave") payload.L = [studentId];
 
-      await axios.post(`${BASE_URL}/a/multiple-attendance/`, payload);
+      await axios.post(`${BASE_URL}/a/student-attendance/`, payload);
 
       setAlertMessage("Attendance marked successfully!");
       setShowAlert(true);
