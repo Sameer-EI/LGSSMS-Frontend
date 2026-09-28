@@ -183,6 +183,9 @@
         newAdmissionList: "/newAdmissionList",
         transferCertificates: "/transfer-certificates",
         feeStructure: "/fee-structure",
+        studentAttendanceRegister:"studentAttendanceRegister",
+        belowAttendance:"belowAttendance",
+        studentAttendanceDashboard:"studentAttendanceDashboard",
 
 
         // all routes before this

@@ -180,7 +180,6 @@ export const Login = () => {
                   Email
                 </span>
               </label>
-
               <input
                 type="email"
                 placeholder="example@gmail.com"

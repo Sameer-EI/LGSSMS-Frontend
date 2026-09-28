@@ -817,6 +817,7 @@ export const fetchAttendanceData = async (date = "") => {
     return null;
   }
 };
+
 export const fetchAttendanceDataStudent = async (
   date = "",
   studentId,
