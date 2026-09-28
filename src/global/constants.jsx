@@ -2,10 +2,10 @@ export const constants = {
   isOnline: true,
   // isOffline: true,
   //baseUrl: "https://api.newprogressive.in", //deployed for school newprogressive PRODUCTION
-  baseUrl: "https://api.lgsschool.eduethical.com", // updated this base url for LGS School production server 03Sep26 at 06:48 PM
+  // baseUrl: "https://api.lgsschool.eduethical.com", // updated this base url for LGS School production server 03Sep26 at 06:48 PM
   // baseUrl: "https://smsproject1.pythonanywhere.com/", //deployed for testing
   // baseUrl: "https://smsproject.pythonanywhere.com/", //deployed for school NPEPS deployed
-//  baseUrl: "https://newprogressive.pythonanywhere.com/", //deployed for school newprogressive testing
+  //  baseUrl: "https://newprogressive.pythonanywhere.com/", //deployed for school newprogressive testing
   // baseUrl: "https://superkidz.pythonanywhere.com/",
   // baseUrl: "https://superkidsschool.pythonanywhere.com/", //deployed for school SUPER KIDS
   // baseUrl: "https://187gwsw1-8000.inc1.devtunnels.ms/", //farha
@@ -14,6 +14,9 @@ export const constants = {
   // baseUrl: "https://94f38xkg-8000.inc1.devtunnels.ms", //naaz
   // baseUrl: "https://p0209tcw-8000.inc1.devtunnels.ms/", //naaz
   //  baseUrl:"https://187gwsw1-8000.inc1.devtunnels.ms/", //farha
+  baseUrl: "https://smsproject.pythonanywhere.com/", //dev EduEthical
+  // baseUrl: "https://lgsschool.eduethical.com/", //prod EduEthical
+
 
   hideEdgeRevealStyle: `
       input[type="password"]::-ms-reveal,   
