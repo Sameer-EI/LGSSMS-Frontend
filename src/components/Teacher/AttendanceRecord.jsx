@@ -5,24 +5,9 @@ import {
   fetchAttendanceDataStudent,
   fetchGuardianAttendanceData,
   fetchTeacherAttendanceData,
-  fetchYearLevels,
 } from "../../services/api/Api";
-
-const getToday = () => new Date().toISOString().split("T")[0];
-
-// Y-axis used by every role that shows percentages
-const percentYAxis = {
-  labels: { formatter: (val) => ` ${val}% ` },
-  min: 0,
-  max: 100,
-};
-
-// Y-axis used by the student view, which shows day counts
-const countYAxis = {
-  labels: { formatter: (val) => `${Math.round(val)}` },
-  min: 0,
-  forceNiceScale: true,
-};
+// Change this import to use the correct function
+import { fetchYearLevels } from "../../services/api/Api"; // Fixed import name
 
 const AttendanceRecord = () => {
   // Loader & Error state
@@ -33,19 +18,24 @@ const AttendanceRecord = () => {
   const userRole = localStorage.getItem("userRole");
   const studentId = localStorage.getItem("studentId");
   const guardianId = localStorage.getItem("guardianId");
+  // Remove teacherClass from localStorage if not needed
+  // const teacherClass = localStorage.getItem("teacherClass");
 
   // For teacher: class selection state
   const [teacherClasses, setTeacherClasses] = useState([]);
   const [selectedClass, setSelectedClass] = useState("");
 
-  const [selectedDate, setSelectedDate] = useState(getToday);
+  const [selectedDate, setSelectedDate] = useState(() => {
+    const today = new Date();
+    return today.toISOString().split("T")[0];
+  });
 
   const [overallAttendance, setOverallAttendance] = useState({
     present: 0,
     total: 0,
     percentage: "0%",
   });
-
+  
   const [chartData, setChartData] = useState({
     series: [{ name: "Attendance %", data: [] }],
     options: {
@@ -56,7 +46,7 @@ const AttendanceRecord = () => {
           show: false,
         },
         events: {
-          mounted: function () {
+          mounted: function (chartContext, config) {
             const svgElement = document.querySelector(".apexcharts-svg");
             if (svgElement) {
               svgElement.classList.add("exportable-chart");
@@ -65,7 +55,9 @@ const AttendanceRecord = () => {
         },
       },
       xaxis: { categories: [] },
-      yaxis: percentYAxis,
+      yaxis: {
+        labels: { formatter: (val) => ` ${val}% ` },
+      },
       tooltip: {
         y: { formatter: (val) => ` ${val}% ` },
       },
@@ -81,13 +73,13 @@ const AttendanceRecord = () => {
 
   const loadYearLevels = async () => {
     try {
-      const data = await fetchYearLevels();
+      const data = await fetchYearLevels(); // Using the correct function
       if (data && Array.isArray(data)) {
-        const classes = data.map(
-          (item) => item.level_name || item.name || item.year_level
-        );
+        // Extract level names from the response
+        const classes = data.map(item => item.level_name || item.name || item.year_level);
         setTeacherClasses(classes);
-
+        
+        // Set default to first class if available
         if (classes.length > 0) {
           setSelectedClass(classes[0]);
         }
@@ -124,11 +116,11 @@ const AttendanceRecord = () => {
         case "office staff":
           data = await fetchAttendanceData(selectedDate);
           if (data) {
-            // For director/office staff: show class-wise attendance
+            // For director/officeStaff: show class-wise attendance
             setOverallAttendance(
               data.overall_attendance || { present: 0, total: 0, percentage: "0%" }
             );
-
+            
             const classWise = data.class_wise_attendance || [];
             const categories = classWise.map((item) => item.class_name);
             const percentageValues = classWise.map(
@@ -138,15 +130,7 @@ const AttendanceRecord = () => {
             setChartData((prev) => ({
               ...prev,
               series: [{ name: "Attendance %", data: percentageValues }],
-              options: {
-                ...prev.options,
-                xaxis: { categories },
-                yaxis: percentYAxis,
-                tooltip: { y: { formatter: (val) => ` ${val}% ` } },
-                plotOptions: { bar: { distributed: false } },
-                colors: undefined,
-                legend: { show: true },
-              },
+              options: { ...prev.options, xaxis: { categories } },
             }));
           }
           break;
@@ -169,16 +153,14 @@ const AttendanceRecord = () => {
             const yearlyPercentages = data.map((item) => item.yearly_percentage || 0);
 
             // Calculate overall for teacher's class
-            const presentStudents = data.reduce(
-              (sum, item) => sum + (item.monthly_summary?.present || 0),
-              0
-            );
-            const totalDays = data.reduce(
-              (sum, item) => sum + (item.monthly_summary?.total_days || 0),
-              0
-            );
-            const avgPercentage =
-              totalDays > 0 ? ((presentStudents / totalDays) * 100).toFixed(1) : 0;
+            const totalStudents = data.length;
+            const presentStudents = data.reduce((sum, item) => {
+              return sum + (item.monthly_summary?.present || 0);
+            }, 0);
+            const totalDays = data.reduce((sum, item) => {
+              return sum + (item.monthly_summary?.total_days || 0);
+            }, 0);
+            const avgPercentage = totalDays > 0 ? (presentStudents / totalDays * 100).toFixed(1) : 0;
 
             setOverallAttendance({
               present: presentStudents,
@@ -186,66 +168,58 @@ const AttendanceRecord = () => {
               percentage: `${avgPercentage}%`,
             });
 
+            // Show two series: Monthly and Yearly percentages
             setChartData((prev) => ({
               ...prev,
               series: [
                 { name: "Monthly %", data: monthlyPercentages },
-                { name: "Yearly %", data: yearlyPercentages },
+                { name: "Yearly %", data: yearlyPercentages }
               ],
-              options: {
-                ...prev.options,
+              options: { 
+                ...prev.options, 
                 xaxis: { categories },
-                yaxis: percentYAxis,
-                tooltip: { y: { formatter: (val) => ` ${val}% ` } },
-                plotOptions: { bar: { distributed: false } },
-                colors: undefined,
-                legend: { show: true },
+                yaxis: {
+                  ...prev.options.yaxis,
+                  max: 100 // Set max to 100% for percentages
+                }
               },
             }));
           }
           break;
 
-        case "student": {
+        case "student":
           data = await fetchAttendanceDataStudent(selectedDate, studentId);
           if (data) {
-            // API shape: { student_name, year_level, filter_date,
-            //              attendance: { present, absent, leave, total } }
-            const att = data.attendance || {};
-            const present = att.present || 0;
-            const absent = att.absent || 0;
-            const leave = att.leave || 0;
-            const total = att.total || 0;
-            const pct = total > 0 ? ((present / total) * 100).toFixed(1) : 0;
-
+            // For student: show monthly vs yearly comparison
             setOverallAttendance({
-              present,
-              total,
-              percentage: `${pct}%`,
+              present: data.monthly_summary?.present || 0,
+              total: data.monthly_summary?.total_days || 0,
+              percentage: `${data.monthly_percentage || 0}%`,
             });
 
+            // Student has only one data point, show as donut chart or single bar
             setChartData((prev) => ({
               ...prev,
-              series: [{ name: "Days", data: [present, absent, leave] }],
-              options: {
-                ...prev.options,
+              series: [
+                { 
+                  name: "Attendance", 
+                  data: [data.monthly_percentage || 0, data.yearly_percentage || 0] 
+                }
+              ],
+              options: { 
+                ...prev.options, 
+                xaxis: { categories: ["Monthly", "Yearly"] },
                 chart: { ...prev.options.chart, type: "bar" },
-                xaxis: { categories: ["Present", "Absent", "Leave"] },
-                yaxis: countYAxis,
-                tooltip: { y: { formatter: (val) => `${val}` } },
                 plotOptions: {
                   bar: {
                     horizontal: false,
-                    columnWidth: "40%",
-                    distributed: true,
-                  },
-                },
-                colors: ["#22c55e", "#ef4444", "#f59e0b"],
-                legend: { show: false },
+                    columnWidth: '50%',
+                  }
+                }
               },
             }));
           }
           break;
-        }
 
         case "guardian":
           data = await fetchGuardianAttendanceData(selectedDate, guardianId);
@@ -253,7 +227,7 @@ const AttendanceRecord = () => {
             // For guardian: show attendance for each child
             const children = data.children || [];
             const categories = children.map((child) => child.student_name);
-            const monthlyPercentages = children.map((child) =>
+            const monthlyPercentages = children.map((child) => 
               parseFloat(child.monthly_summary?.percentage?.replace("%", "") || 0)
             );
             const yearlyPercentages = children.map((child) =>
@@ -261,16 +235,13 @@ const AttendanceRecord = () => {
             );
 
             // Calculate overall for all children
-            const totalPresent = children.reduce(
-              (sum, child) => sum + (child.monthly_summary?.present || 0),
-              0
+            const totalPresent = children.reduce((sum, child) => 
+              sum + (child.monthly_summary?.present || 0), 0
             );
-            const totalDays = children.reduce(
-              (sum, child) => sum + (child.monthly_summary?.total_days || 0),
-              0
+            const totalDays = children.reduce((sum, child) => 
+              sum + (child.monthly_summary?.total_days || 0), 0
             );
-            const overallPercentage =
-              totalDays > 0 ? ((totalPresent / totalDays) * 100).toFixed(1) : 0;
+            const overallPercentage = totalDays > 0 ? (totalPresent / totalDays * 100).toFixed(1) : 0;
 
             setOverallAttendance({
               present: totalPresent,
@@ -282,16 +253,15 @@ const AttendanceRecord = () => {
               ...prev,
               series: [
                 { name: "Monthly %", data: monthlyPercentages },
-                { name: "Yearly %", data: yearlyPercentages },
+                { name: "Yearly %", data: yearlyPercentages }
               ],
-              options: {
-                ...prev.options,
+              options: { 
+                ...prev.options, 
                 xaxis: { categories },
-                yaxis: percentYAxis,
-                tooltip: { y: { formatter: (val) => ` ${val}% ` } },
-                plotOptions: { bar: { distributed: false } },
-                colors: undefined,
-                legend: { show: true },
+                yaxis: {
+                  ...prev.options.yaxis,
+                  max: 100
+                }
               },
             }));
           }
@@ -320,6 +290,7 @@ const AttendanceRecord = () => {
 
   useEffect(() => {
     if (userRole === "teacher" && teacherClasses.length > 0 && !selectedClass) {
+      // Set initial class when classes are loaded
       setSelectedClass(teacherClasses[0]);
     }
   }, [teacherClasses, userRole, selectedClass]);
@@ -328,18 +299,16 @@ const AttendanceRecord = () => {
     if (userRole !== "teacher" || selectedClass) {
       getData();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate, selectedClass, userRole]);
 
   const handleReset = () => {
-    // Reset to today instead of an empty string so the API always gets a valid date
-    setSelectedDate(getToday());
+    setSelectedDate("");
     if (userRole === "teacher" && teacherClasses.length > 0) {
       setSelectedClass(teacherClasses[0]);
     }
   };
 
-  // Export functions
+  // Fixed Export functions (same as before)
   const handleExportSVG = () => {
     setTimeout(() => {
       const svgElement = document.querySelector(".apexcharts-svg");
@@ -411,14 +380,14 @@ const AttendanceRecord = () => {
     }
 
     let csvContent = "";
-
+    
     // Write headers
-    const seriesNames = series.map((s) => s.name);
+    const seriesNames = series.map(s => s.name);
     csvContent = `Name,${seriesNames.join(",")}\r\n`;
-
+    
     // Write data rows
     categories.forEach((category, index) => {
-      const rowData = series.map((s) => s.data[index] || 0);
+      const rowData = series.map(s => s.data[index] || 0);
       csvContent += `${category},${rowData.join(",")}\r\n`;
     });
 
@@ -464,25 +433,23 @@ const AttendanceRecord = () => {
       <div className="flex flex-col items-center justify-center min-h-screen text-center p-6">
         <i className="fa-solid fa-triangle-exclamation text-5xl text-red-400 mb-4"></i>
         <p className="text-lg text-red-400 font-medium">{error}</p>
-        <button onClick={() => getData()} className="mt-4 btn bgTheme text-white">
+        <button 
+          onClick={() => getData()} 
+          className="mt-4 btn bgTheme text-white"
+        >
           Retry
         </button>
       </div>
     );
   }
 
-  // Show the chart only when at least one value is greater than zero
-  const hasChartData = chartData.series.some((s) =>
-    s.data.some((value) => Number(value) > 0)
-  );
-
   return (
     <div className="min-h-screen p-5 bg-gray-50 dark:bg-gray-900 mb-24 md:mb-10">
       <div className="w-full max-w-7xl mx-auto p-6 bg-base-100 dark:bg-gray-800 rounded-box my-5 shadow-lg">
         <span className="font-bold text-2xl flex pt-5 justify-center gap-1 text-gray-900 dark:text-gray-100">
-          <i className="fa-solid fa-square-poll-vertical flex pt-1" /> Attendance Record
+          <i className="fa-solid fa-square-poll-vertical flex pt-1" />{" "}
+          Attendance Record
           {userRole === "teacher" && selectedClass && ` - ${selectedClass}`}
-          {userRole === "student" && ` - ${selectedDate || "Today"}`}
         </span>
 
         <div className="flex flex-wrap justify-center gap-4 p-4">
@@ -504,12 +471,13 @@ const AttendanceRecord = () => {
           <input
             type="date"
             value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value || getToday())}
+            onChange={(e) => setSelectedDate(e.target.value)}
             className="input input-bordered focus:outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
           />
           <button
             onClick={handleReset}
             className="btn bgTheme disabled:opacity-50 disabled:cursor-not-allowed text-white"
+            disabled={!selectedDate && (userRole !== "teacher" || !selectedClass)}
           >
             Reset
           </button>
@@ -525,7 +493,10 @@ const AttendanceRecord = () => {
           )}
         </div>
 
-        <div className="p-4 flex justify-center overflow-auto relative" ref={chartRef}>
+        <div
+          className="p-4 flex justify-center overflow-auto relative"
+          ref={chartRef}
+        >
           {/* Custom Export Dropdown */}
           <div className="absolute top-2 right-2 z-10">
             <div className="dropdown dropdown-end">
@@ -573,24 +544,18 @@ const AttendanceRecord = () => {
           </div>
 
           {/* Chart */}
-          {hasChartData ? (
+          {chartData.series[0].data.length > 0 ? (
             <Chart
               options={chartData.options}
               series={chartData.series}
               type={chartData.options.chart.type || "bar"}
               height={500}
-              width={
-                userRole === "student"
-                  ? 600
-                  : Math.max(1200, chartData.options.xaxis.categories.length * 80)
-              }
+              width={Math.max(1200, chartData.options.xaxis.categories.length * 80)}
             />
           ) : (
             <div className="flex flex-col items-center justify-center h-96">
               <i className="fa-solid fa-chart-bar text-5xl text-gray-400 mb-4"></i>
-              <p className="text-gray-500 dark:text-gray-400">
-                No attendance recorded for {selectedDate || "this date"}
-              </p>
+              <p className="text-gray-500 dark:text-gray-400">No attendance data available</p>
             </div>
           )}
         </div>
