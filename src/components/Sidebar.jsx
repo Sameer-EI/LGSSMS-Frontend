@@ -395,7 +395,7 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
             )}
 
             {/* Student Attendance - teacher only */}
-            {isAuthenticated && (
+            {/* {isAuthenticated && (
               <div>
                 <h3 className="text-sm font-semibold text-gray-500 uppercase mb-2">
                   Student Attendance
@@ -467,7 +467,7 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
                   )}
                 </ul>
               </div>
-            )}
+            )} */}
 
             {/* Fees */}
             {isAuthenticated &&
