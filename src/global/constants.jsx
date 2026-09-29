@@ -15,7 +15,9 @@ export const constants = {
   // baseUrl: "https://p0209tcw-8000.inc1.devtunnels.ms/", //naaz
   //  baseUrl:"https://187gwsw1-8000.inc1.devtunnels.ms/", //farha
   // baseUrl: "https://smsproject.pythonanywhere.com/", //dev EduEthical
-  baseUrl: "https://lgsschool.eduethical.com/", //prod EduEthical  
+  // baseUrl: "https://lgsschool.eduethical.com/", //prod EduEthical  
+  baseUrl: "https://api.lgsschool.eduethical.com/", //prod EduEthical  
+
 
 
   hideEdgeRevealStyle: `
