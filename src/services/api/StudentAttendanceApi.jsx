@@ -148,3 +148,44 @@ export const fetchStudentHeatMap = async (studentId, days = 30) => {
     throw err;
   }
 };
+
+
+export const fetchAllAttendanceDefaulters = async (
+  threshold = 75,
+  yearLevelId = "ALL",
+) => {
+  try {
+    const url = `${BASE_URL}/a/student-attendance/defaulters/`;
+    const baseParams = { threshold, year_level_id: yearLevelId };
+ 
+    const response = await axios.get(url, { params: baseParams });
+    const data = response.data;
+ 
+    // Plain array response — already everything.
+    if (Array.isArray(data)) return data;
+ 
+    const all = Array.isArray(data?.results) ? [...data.results] : [];
+ 
+    // Paginated response — keep pulling pages until there's no `next`.
+    const pageSize = all.length;
+    let hasNext = Boolean(data?.next);
+ 
+    while (hasNext && pageSize > 0) {
+      const page = await axios.get(url, {
+        params: { ...baseParams, limit: pageSize, offset: all.length },
+      });
+      const results = Array.isArray(page.data?.results)
+        ? page.data.results
+        : [];
+ 
+      if (results.length === 0) break; // safety: never loop on an empty page
+      all.push(...results);
+      hasNext = Boolean(page.data?.next);
+    }
+ 
+    return all;
+  } catch (err) {
+    console.error("Failed to fetch all attendance defaulters:", err);
+    throw err;
+  }
+};

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useContext } from "react";
 import ReactDOM from "react-dom";
 import {
   fetchStudentAttendanceRegister,
@@ -7,8 +7,13 @@ import {
 } from "../../services/api/StudentAttendanceApi";
 import { fetchYearLevels, fetchTeacherDashboard } from "../../services/api/Api";
 import { SuccessModal } from "../Modals/SuccessModal";
+import { AuthContext } from "../../context/AuthContext";
 
 // ---------- Helpers ----------
+// Office staff profile endpoint — its response `id` is the OfficeStaff id
+// that the attendance API expects (NOT the user id).
+const OFFICE_STAFF_PROFILE_URL = "/d/officestaff/OfficeStaff_my_profile/";
+
 // Teacher id (used for saving attendance)
 const getLoggedInTeacherId = () => {
   const raw =
@@ -16,21 +21,6 @@ const getLoggedInTeacherId = () => {
   const id = Number(raw);
   if (!raw || Number.isNaN(id) || id <= 0) {
     console.warn("teacherId not found in localStorage:", raw);
-    return null;
-  }
-  return id;
-};
-
-// Office staff id (used for saving attendance when an office-staff user marks)
-const getLoggedInOfficeStaffId = () => {
-  const raw =
-    localStorage.getItem("officeStaffId") ??
-    localStorage.getItem("office_staff_id") ??
-    localStorage.getItem("user_id") ??
-    localStorage.getItem("userId");
-  const id = Number(raw);
-  if (!raw || Number.isNaN(id) || id <= 0) {
-    console.warn("officeStaffId not found in localStorage:", raw);
     return null;
   }
   return id;
@@ -46,14 +36,18 @@ const getLoggedInUserId = () => {
 
 // Logged-in user's role, e.g. "office staff" or "teacher"
 const getLoggedInRole = () => {
-  const raw = localStorage.getItem("userRole") ?? localStorage.getItem("user_role");
+  const raw =
+    localStorage.getItem("userRole") ?? localStorage.getItem("user_role");
   return raw ? String(raw).trim().toLowerCase() : null;
 };
 
 // Office staff can mark attendance for ANY class via the same API.
 // Everyone else (teachers) is restricted to their single allocated class.
 const isOfficeStaffRole = (role) =>
-  role === "office staff" || role === "office_staff" || role === "staff" || role === "admin";
+  role === "office staff" ||
+  role === "office_staff" ||
+  role === "staff" ||
+  role === "admin";
 
 // Fallback: teacher's year level id from localStorage
 const getTeacherYearLevelId = () => {
@@ -77,7 +71,10 @@ const getTeacherYearLevelId = () => {
 const getLevelName = (cls) =>
   cls?.name || cls?.year_name || cls?.level_name || `Class ${cls?.id}`;
 
-const normalize = (str) => String(str ?? "").trim().toLowerCase();
+const normalize = (str) =>
+  String(str ?? "")
+    .trim()
+    .toLowerCase();
 
 // Local (not UTC) date as YYYY-MM-DD
 const getTodayLocal = () => {
@@ -234,10 +231,7 @@ const StudentHeatmapPanel = ({ student, onClose }) => {
   return ReactDOM.createPortal(
     <div className="fixed inset-0 z-[999] flex justify-end">
       {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-gray-900/50"
-        onClick={onClose}
-      ></div>
+      <div className="absolute inset-0 bg-gray-900/50" onClick={onClose}></div>
 
       {/* Panel: full screen on mobile, side drawer from sm up */}
       <aside
@@ -376,10 +370,15 @@ const StudentHeatmapPanel = ({ student, onClose }) => {
 
 // ---------- Main component ----------
 const StudentAttendanceRegister = () => {
+  const { axiosInstance } = useContext(AuthContext);
+
   // Role: decides whether the user can browse/mark every class (office
   // staff) or is locked to their single allocated class (teacher).
   const [role] = useState(getLoggedInRole);
   const canMarkAnyClass = isOfficeStaffRole(role);
+
+  // Office staff id, taken from the OfficeStaff_my_profile API response
+  const [officeStaffId, setOfficeStaffId] = useState(null);
 
   // Data States
   const [yearLevels, setYearLevels] = useState([]);
@@ -434,6 +433,29 @@ const StudentAttendanceRegister = () => {
 
     return "Failed to save attendance. Please try again.";
   };
+
+  // Fetch the office staff profile and take its `id`.
+  // Returns the id (or null) so it can also be used on demand while saving.
+  const fetchOfficeStaffId = async () => {
+    try {
+      const res = await axiosInstance.get(OFFICE_STAFF_PROFILE_URL);
+      const id = Number(res.data?.id);
+      if (!Number.isNaN(id) && id > 0) {
+        setOfficeStaffId(id);
+        return id;
+      }
+      console.warn("Office staff profile has no valid id:", res.data);
+    } catch (err) {
+      console.error("Failed to fetch office staff profile", err);
+    }
+    return null;
+  };
+
+  // Load the office staff id once on mount (office staff only)
+  useEffect(() => {
+    if (canMarkAnyClass) fetchOfficeStaffId();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canMarkAnyClass]);
 
   // On mount: load year levels + teacher dashboard, then decide which
   // class(es) this user is allowed to see, based on their role.
@@ -612,14 +634,20 @@ const StudentAttendanceRegister = () => {
     // Resolve the correct marker id for whoever is actually logged in.
     // Exactly one of these goes to the API; the other stays null.
     const teacherId = canMarkAnyClass ? null : getLoggedInTeacherId();
-    const officeStaffId = canMarkAnyClass ? getLoggedInOfficeStaffId() : null;
 
-    if (canMarkAnyClass && !officeStaffId) {
-      setApiError(
-        "Could not identify the logged-in office staff account. Please log out and log in again.",
-      );
-      return;
+    // Office staff: use the id from the profile API. If the mount fetch
+    // hasn't finished (or failed), try once more right now.
+    let staffId = null;
+    if (canMarkAnyClass) {
+      staffId = officeStaffId ?? (await fetchOfficeStaffId());
+      if (!staffId) {
+        setApiError(
+          "Could not identify the logged-in office staff account. Please log out and log in again.",
+        );
+        return;
+      }
     }
+
     if (!canMarkAnyClass && !teacherId) {
       setApiError(
         "Could not identify the logged-in teacher. Please log out and log in again.",
@@ -639,7 +667,7 @@ const StudentAttendanceRegister = () => {
       // an already-marked student — it's a bulk update/create on the backend.
       await markStudentAttendance(
         selectedClass,
-        { teacherId, officeStaffId },
+        { teacherId, officeStaffId: staffId },
         selectedDate,
         pendingMap,
       );
@@ -908,8 +936,8 @@ const StudentAttendanceRegister = () => {
           {isSchoolDay && markedCount > 0 && (
             <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200 px-4 py-3 rounded-md text-sm shadow-sm">
               {markedCount} of {students.length} students already have
-              attendance marked for this date. You can still edit any of
-              them below.
+              attendance marked for this date. You can still edit any of them
+              below.
             </div>
           )}
 
@@ -971,40 +999,50 @@ const StudentAttendanceRegister = () => {
             </div>
 
             {selectedStudentIds.size > 0 && isSchoolDay && (
-              <div className="flex items-center justify-between sm:justify-start gap-3 bg-gray-50 dark:bg-gray-700 px-3 py-2 sm:py-1.5 rounded-md border border-gray-200 dark:border-gray-600">
-                <span className="text-xs text-gray-500 dark:text-gray-400">
-                  Bulk mark ({selectedStudentIds.size}):
+              <div className="flex flex-wrap items-center justify-center sm:justify-end gap-2 rounded-lg bg-slate-100 dark:bg-gray-700/60 px-3 py-2.5">
+                <span className="w-full sm:w-auto text-center text-xs text-gray-500 dark:text-gray-400 sm:mr-1">
+                  {selectedStudentIds.size} selected
                 </span>
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => handleBulkAction("P")}
-                    className="text-xs font-medium text-green-600 hover:text-green-700"
-                  >
-                    Present
-                  </button>
-                  <button
-                    onClick={() => handleBulkAction("A")}
-                    className="text-xs font-medium text-red-600 hover:text-red-700"
-                  >
-                    Absent
-                  </button>
-                  <button
-                    onClick={() => handleBulkAction("Leave")}
-                    className="text-xs font-medium text-blue-600 hover:text-blue-700"
-                  >
-                    Leave
-                  </button>
-                </div>
+
+                <button
+                  type="button"
+                  onClick={() => handleBulkAction("P")}
+                  className="rounded-md border border-green-600/70 bg-green-50 px-3.5 py-1.5 text-xs sm:text-sm font-medium text-green-700 transition-colors hover:bg-green-100 dark:border-green-500/60 dark:bg-green-900/20 dark:text-green-400 dark:hover:bg-green-900/40"
+                >
+                  Mark Present
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleBulkAction("A")}
+                  className="rounded-md border border-red-500/70 bg-red-50 px-3.5 py-1.5 text-xs sm:text-sm font-medium text-red-600 transition-colors hover:bg-red-100 dark:border-red-500/60 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/40"
+                >
+                  Mark Absent
+                </button>
+
+                {/* Optional: only add this if your backend supports a "Late" status */}
+                {/*
+    <button
+      type="button"
+      onClick={() => handleBulkAction("Late")}
+      className="rounded-md border border-amber-500/70 bg-amber-50 px-3.5 py-1.5 text-xs sm:text-sm font-medium text-amber-700 transition-colors hover:bg-amber-100 dark:border-amber-500/60 dark:bg-amber-900/20 dark:text-amber-400 dark:hover:bg-amber-900/40"
+    >
+      Mark Late
+    </button>
+    */}
+
+                <button
+                  type="button"
+                  onClick={() => handleBulkAction("Leave")}
+                  className="rounded-md border border-slate-600/70 bg-slate-50 px-3.5 py-1.5 text-xs sm:text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-400/60 dark:bg-slate-800/40 dark:text-slate-300 dark:hover:bg-slate-800/70"
+                >
+                  Mark Leave
+                </button>
               </div>
             )}
           </div>
         </div>
       </div>
-
-      {/* Students card.
-          Flex column with a capped height: the list area in the middle
-          scrolls on its own (with a sticky header), while the save bar
-          below it stays fixed at the bottom of the card. */}
       <div className="flex flex-col max-h-[70vh] border rounded-lg shadow-lg overflow-hidden borderTheme bg-white dark:bg-gray-800 dark:border-gray-700">
         {/* ---------- Separate scroll area (table + mobile cards) ---------- */}
         <div className="flex-1 min-h-0 overflow-auto overscroll-contain [scrollbar-width:thin]">
@@ -1141,9 +1179,6 @@ const StudentAttendanceRegister = () => {
           </div>
         </div>
 
-        {/* ---------- Fixed footer (save bar) ----------
-            Sits outside the scroll area, so it never scrolls away and is
-            always visible at the bottom of the students card. */}
         {isSchoolDay && students.length > 0 && (
           <div className="shrink-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-4 sm:px-6 py-3 flex items-center justify-between gap-3 shadow-[0_-4px_8px_-6px_rgba(0,0,0,0.15)]">
             <span className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">

@@ -1,9 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   fetchAttendanceDefaulters,
+  fetchAllAttendanceDefaulters,
   notifyParentAboutAttendance,
 } from "../../services/api/StudentAttendanceApi";
 import { fetchYearLevels, fetchTeacherDashboard } from "../../services/api/Api";
+import StudentHeatmapPanel from "./StudentHeatmapPanel";
 
 const THRESHOLD = 75;
 const PAGE_SIZE = 10;
@@ -113,8 +115,7 @@ const BelowAttendance = () => {
   const [defaulters, setDefaulters] = useState([]);
   const [totalDefaulters, setTotalDefaulters] = useState(0);
 
-  // Initial/class-change load vs. "load next page" load — kept as separate
-  // loading flags, same split as StudentAttendanceDashboard's Needs Attention table.
+  // Initial/class-change load vs. "Load more" click — separate loading flags.
   const [defaultersLoading, setDefaultersLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -122,16 +123,16 @@ const BelowAttendance = () => {
 
   const [notifiedIds, setNotifiedIds] = useState(new Set());
   const [notifyingId, setNotifyingId] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
-  // Refs, not state, for values read inside the scroll-triggered fetch guard.
-  // State updates are async/batched, so rapid-fire scroll events can both read
-  // a stale "not loading" / stale offset before the first setState commits,
-  // causing duplicate requests for the same page. Refs update synchronously.
+  // Student whose attendance heatmap side panel is open
+  const [heatmapStudent, setHeatmapStudent] = useState(null);
+
+  // Refs so the "Load more" handler always reads the latest offset/class and
+  // a double-click can't fire two requests for the same page.
   const offsetRef = useRef(0);
   const isFetchingMoreRef = useRef(false);
   const selectedClassRef = useRef(selectedClass);
-
-  const tableScrollRef = useRef(null);
 
   useEffect(() => {
     selectedClassRef.current = selectedClass;
@@ -272,8 +273,8 @@ const BelowAttendance = () => {
     };
   }, [selectedClass]);
 
-  // Load next page — guarded by a ref (synchronous), not state, so rapid-fire
-  // scroll events during an in-flight request can't slip through and double-fetch.
+  // Load the next page when the "Load more" button is clicked. New rows are
+  // only ever appended at the bottom (no re-sorting), so nothing jumps.
   const loadMoreDefaulters = async () => {
     if (
       isFetchingMoreRef.current ||
@@ -283,37 +284,35 @@ const BelowAttendance = () => {
     )
       return;
 
+    const classAtStart = selectedClassRef.current;
+
     isFetchingMoreRef.current = true;
     setLoadingMore(true);
 
     try {
       const result = await fetchAttendanceDefaulters(
         THRESHOLD,
-        selectedClassRef.current,
+        classAtStart,
         PAGE_SIZE,
         offsetRef.current
       );
+
+      // The class filter changed while this request was in flight — drop it.
+      if (selectedClassRef.current !== classAtStart) return;
+
       const results = Array.isArray(result?.results) ? result.results : [];
 
       setDefaulters((prev) => [...prev, ...results]);
       offsetRef.current += results.length;
       // Also stop if the API says there's a next page but returns nothing —
-      // avoids an infinite retry loop against the same offset.
+      // avoids getting stuck on the same offset.
       setHasMore(Boolean(result?.next) && results.length > 0);
     } catch (err) {
       console.error("Failed to load more defaulters:", err);
-      setHasMore(false); // stop retrying on scroll; existing rows stay intact
+      // Keep existing rows and leave the button available so the user can retry.
     } finally {
       setLoadingMore(false);
       isFetchingMoreRef.current = false;
-    }
-  };
-
-  const handleTableScroll = (e) => {
-    const el = e.target;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    if (nearBottom) {
-      loadMoreDefaulters();
     }
   };
 
@@ -324,6 +323,23 @@ const BelowAttendance = () => {
     setSelectedClass(clsId);
     // The [selectedClass] effect above handles resetting defaulters/offsetRef/hasMore
     // and fetching page one for the new class.
+  };
+
+  // Export ALL defaulters for the current class filter — not just the rows
+  // loaded so far — by fetching the full list from the API first.
+  const handleExportCSV = async () => {
+    if (exporting || selectedClass === null) return;
+
+    try {
+      setExporting(true);
+      const rows = await fetchAllAttendanceDefaulters(THRESHOLD, selectedClass);
+      if (rows.length === 0) return;
+      downloadCSV(rows);
+    } catch (err) {
+      // failure is already logged inside the API function
+    } finally {
+      setExporting(false);
+    }
   };
 
   const handleNotify = async (studentId) => {
@@ -338,10 +354,8 @@ const BelowAttendance = () => {
     }
   };
 
-  const sortedDefaulters = useMemo(
-    () => [...defaulters].sort((a, b) => a.term_percentage - b.term_percentage),
-    [defaulters]
-  );
+  // Stops a click on a control from also opening the heatmap (row click)
+  const stop = (e) => e.stopPropagation();
 
   const pillBase =
     "rounded-full px-4 py-1.5 text-xs font-medium transition sm:text-sm whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-60";
@@ -391,6 +405,14 @@ const BelowAttendance = () => {
 
   return (
     <div className="p-4 space-y-6 mb-24 md:mb-10 mx-auto max-w-7xl">
+      {/* --- STUDENT HEATMAP SIDE PANEL --- */}
+      {heatmapStudent && (
+        <StudentHeatmapPanel
+          student={heatmapStudent}
+          onClose={() => setHeatmapStudent(null)}
+        />
+      )}
+
       {/* Main Card Container */}
       <div className="border rounded-lg shadow-lg overflow-hidden borderTheme bg-white dark:bg-gray-800 dark:border-gray-700">
         {/* Header Section */}
@@ -405,11 +427,13 @@ const BelowAttendance = () => {
           </div>
 
           <button
-            onClick={() => downloadCSV(sortedDefaulters)}
-            disabled={defaultersLoading || sortedDefaulters.length === 0}
+            onClick={handleExportCSV}
+            disabled={
+              exporting || defaultersLoading || defaulters.length === 0
+            }
             className="inline-flex items-center justify-center rounded-md bg-white text-gray-800 px-4 py-2 text-sm font-medium transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Export CSV
+            {exporting ? "Exporting…" : "Export CSV"}
           </button>
         </div>
 
@@ -458,11 +482,12 @@ const BelowAttendance = () => {
           )}
         </div>
 
-        {/* Table — scrollable body, header pinned, next page fetched near bottom */}
+        {/* Table — header pinned, rows scroll inside a fixed max height.
+            Nothing loads on scroll; more rows come only from "Load more". */}
         <div
-          ref={tableScrollRef}
-          onScroll={handleTableScroll}
-          className="max-h-[65vh] overflow-y-auto overflow-x-auto"
+          className={`max-h-[65vh] overflow-y-auto overflow-x-auto overscroll-contain transition-opacity ${
+            defaultersLoading ? "opacity-50 pointer-events-none" : ""
+          }`}
         >
           <table className="w-full min-w-[720px] border-collapse text-left text-sm">
             <thead className="sticky top-0 z-10 bg-gray-100 text-xs uppercase tracking-wide text-gray-600 dark:bg-gray-800 dark:text-gray-300 border-b border-gray-200 dark:border-gray-600 shadow-sm">
@@ -486,7 +511,7 @@ const BelowAttendance = () => {
             </thead>
 
             <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-              {sortedDefaulters.length === 0 ? (
+              {defaulters.length === 0 ? (
                 <tr>
                   <td
                     colSpan={5}
@@ -498,82 +523,87 @@ const BelowAttendance = () => {
                   </td>
                 </tr>
               ) : (
-                <>
-                  {sortedDefaulters.map((student) => (
-                    <tr
-                      key={student.student_id}
-                      className="transition hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                defaulters.map((student) => (
+                  <tr
+                    key={student.student_id}
+                    onClick={() => setHeatmapStudent(student)}
+                    title="View attendance history"
+                    className="cursor-pointer transition hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                  >
+                    <td className="whitespace-nowrap px-4 py-4 sm:px-6">
+                      <span className="font-medium text-gray-800 dark:text-gray-100">
+                        {student.student_name}
+                      </span>{" "}
+                      <span className="text-xs text-gray-400 dark:text-gray-500 sm:text-sm">
+                        Roll {student.roll_number}
+                      </span>
+                    </td>
+
+                    <td className="whitespace-nowrap px-4 py-4 text-gray-700 sm:px-6 dark:text-gray-300">
+                      {student.class_name}
+                    </td>
+
+                    <td className="whitespace-nowrap px-4 py-4 sm:px-6">
+                      <span className="inline-flex rounded-full bg-red-50 dark:bg-red-900/30 px-3 py-1 text-xs font-semibold text-red-600 dark:text-red-400">
+                        {student.term_percentage}%
+                      </span>
+                    </td>
+
+                    <td className="whitespace-nowrap px-4 py-4 text-gray-700 sm:px-6 dark:text-gray-300">
+                      {student.days_absent} days
+                    </td>
+
+                    {/* stop(): clicking Notify must not also open the heatmap */}
+                    <td
+                      className="whitespace-nowrap px-4 py-4 text-right sm:px-6"
+                      onClick={stop}
                     >
-                      <td className="whitespace-nowrap px-4 py-4 sm:px-6">
-                        <span className="font-medium text-gray-800 dark:text-gray-100">
-                          {student.student_name}
-                        </span>{" "}
-                        <span className="text-xs text-gray-400 dark:text-gray-500 sm:text-sm">
-                          Roll {student.roll_number}
+                      {notifiedIds.has(student.student_id) ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-lg bg-green-50 dark:bg-green-900/30 px-3 py-1.5 text-xs font-medium text-green-700 dark:text-green-400">
+                          Sent ✓
                         </span>
-                      </td>
-
-                      <td className="whitespace-nowrap px-4 py-4 text-gray-700 sm:px-6 dark:text-gray-300">
-                        {student.class_name}
-                      </td>
-
-                      <td className="whitespace-nowrap px-4 py-4 sm:px-6">
-                        <span className="inline-flex rounded-full bg-red-50 dark:bg-red-900/30 px-3 py-1 text-xs font-semibold text-red-600 dark:text-red-400">
-                          {student.term_percentage}%
-                        </span>
-                      </td>
-
-                      <td className="whitespace-nowrap px-4 py-4 text-gray-700 sm:px-6 dark:text-gray-300">
-                        {student.days_absent} days
-                      </td>
-
-                      <td className="whitespace-nowrap px-4 py-4 text-right sm:px-6">
-                        {notifiedIds.has(student.student_id) ? (
-                          <span className="inline-flex items-center gap-1.5 rounded-lg bg-green-50 dark:bg-green-900/30 px-3 py-1.5 text-xs font-medium text-green-700 dark:text-green-400">
-                            Sent ✓
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => handleNotify(student.student_id)}
-                            disabled={notifyingId === student.student_id}
-                            className="bgTheme text-white rounded-md px-4 py-1.5 text-xs font-medium transition hover:opacity-90 disabled:opacity-60"
-                          >
-                            {notifyingId === student.student_id
-                              ? "Notifying…"
-                              : "Notify parent"}
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                  {loadingMore && (
-                    <tr>
-                      <td
-                        colSpan={5}
-                        className="px-4 py-4 text-center text-gray-400 dark:text-gray-500 text-xs"
-                      >
-                        <div className="flex items-center justify-center gap-2">
-                          <div className="w-2 h-2 bgTheme rounded-full animate-bounce"></div>
-                          <div className="w-2 h-2 bgTheme rounded-full animate-bounce [animation-delay:-0.2s]"></div>
-                          <div className="w-2 h-2 bgTheme rounded-full animate-bounce [animation-delay:-0.4s]"></div>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                  {!hasMore && !loadingMore && (
-                    <tr>
-                      <td
-                        colSpan={5}
-                        className="px-4 py-3 text-center text-gray-300 dark:text-gray-600 text-xs"
-                      >
-                        — end of list —
-                      </td>
-                    </tr>
-                  )}
-                </>
+                      ) : (
+                        <button
+                          onClick={() => handleNotify(student.student_id)}
+                          disabled={notifyingId === student.student_id}
+                          className="bgTheme text-white rounded-md px-4 py-1.5 text-xs font-medium transition hover:opacity-90 disabled:opacity-60"
+                        >
+                          {notifyingId === student.student_id
+                            ? "Notifying…"
+                            : "Notify parent"}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>
+
+          {/* Load more — sits right below the last row */}
+          {defaulters.length > 0 && hasMore && (
+            <div className="flex justify-center border-t border-gray-100 px-4 py-4 dark:border-gray-700">
+              <button
+                type="button"
+                onClick={loadMoreDefaulters}
+                disabled={loadingMore}
+                className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+              >
+                {loadingMore ? (
+                  <>
+                    <span className="flex items-center gap-1">
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bgTheme"></span>
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bgTheme [animation-delay:-0.2s]"></span>
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bgTheme [animation-delay:-0.4s]"></span>
+                    </span>
+                    Loading…
+                  </>
+                ) : (
+                  "Load more"
+                )}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Footer count */}
