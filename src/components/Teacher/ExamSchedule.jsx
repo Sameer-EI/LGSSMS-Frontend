@@ -191,7 +191,6 @@ const ExamSchedule = () => {
           return Object.values(value).flatMap(collectMessages);
         return [];
       };
-
       const data = err.response?.data;
       const messages = [...new Set(collectMessages(data?.message ?? data))];
 

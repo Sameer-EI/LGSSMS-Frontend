@@ -14,6 +14,17 @@ const YEAR_MAPPING = {
   "2029-2030": 6,
 };
 
+// Stream options (only used for Class 11 & Class 12)
+const STREAM_OPTIONS = ["COMM", "PCM", "PCB", "ARTS"];
+
+// Only Class 11 and Class 12 have streams
+// Matches "Class 11", "Class 12", "Class XI", "11th", "Grade 12", etc. (not "Class 1" / "Class 10")
+const isSeniorLevelName = (name) =>
+  /(^|\D)(11|12)(\D|$)|\b(xi|xii)\b/i.test((name || "").trim());
+
+// year-level ids for Class 11 and Class 12 (from the year-levels API)
+const SENIOR_LEVEL_IDS = [14, 15];
+
 const parseYearStart = (yearName) => {
   if (!yearName) return null;
   const match = yearName.match(/^(\d{4})/);
@@ -35,14 +46,14 @@ const getYearIdFromName = (yearName) => {
 
 const getNextYearName = (currentYearName) => {
   if (!currentYearName) return null;
-  const startYear = parseInt(currentYearName.split('-')[0]);
+  const startYear = parseInt(currentYearName.split("-")[0]);
   const nextStartYear = startYear + 1;
   return `${nextStartYear}-${nextStartYear + 1}`;
 };
 
 const getPrevYearName = (currentYearName) => {
   if (!currentYearName) return null;
-  const startYear = parseInt(currentYearName.split('-')[0]);
+  const startYear = parseInt(currentYearName.split("-")[0]);
   const prevStartYear = startYear - 1;
   return `${prevStartYear}-${prevStartYear + 1}`;
 };
@@ -54,6 +65,7 @@ const AllStudentsPerClass = () => {
   const [students, setStudents] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [genderFilter, setGenderFilter] = useState("");
+  const [streamFilter, setStreamFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const { userRole, axiosInstance } = useContext(AuthContext);
@@ -72,6 +84,22 @@ const AllStudentsPerClass = () => {
   const currentYearId = location.state?.year_id || null;
   const currentYearStart = parseYearStart(yearLevelName);
 
+  // Resolve the class name even if the page was refreshed and location.state was lost
+  const resolvedLevelName =
+    levelName !== "Unknown"
+      ? levelName
+      : yearLevels.find((l) => String(l.id) === String(currentLevelId))?.level_name || "";
+
+  // Stream filter / column is visible only for Class 11 & Class 12
+  const isSeniorClass =
+    isSeniorLevelName(resolvedLevelName) ||
+    isSeniorLevelName(
+      yearLevels.find((l) => String(l.id) === String(id))?.level_name
+    ) ||
+    SENIOR_LEVEL_IDS.includes(Number(id)) ||
+    SENIOR_LEVEL_IDS.includes(Number(currentLevelId)) ||
+    students.some((s) => s.section);
+
   const availablePromotionClasses = yearLevels.filter((level) => Number(level.id) > Number(currentLevelId));
   const availableDemotionClasses = yearLevels.filter((level) => Number(level.id) < Number(currentLevelId));
   const availablePromotionYears = schoolYears.filter((year) => parseYearStart(year.year_name) > currentYearStart);
@@ -87,7 +115,8 @@ const AllStudentsPerClass = () => {
       const data = await fetchStudentYearLevelByClass(
         id,
         yearLevelName || null,
-        genderFilter || null
+        genderFilter || null,
+        isSeniorClass && streamFilter ? streamFilter : null
       );
 
       const sortedData = [...data].sort((a, b) =>
@@ -225,12 +254,12 @@ const AllStudentsPerClass = () => {
             message += `   From: ${item.from_level} (${item.from_year})\n`;
             message += `   To: ${item.to_level} (${item.to_year})\n`;
             message += `   Status: Success\n`;
-            message += `   Reason: ${item.reason || 'N/A'}\n\n`;
+            message += `   Reason: ${item.reason || "N/A"}\n\n`;
           } else if (item.status === "failed") {
             failedCount++;
             message += `❌ Student: ${item.student_name}\n`;
             message += `   Status: Failed\n`;
-            message += `   Reason: ${item.reason || 'Unknown error'}\n\n`;
+            message += `   Reason: ${item.reason || "Unknown error"}\n\n`;
           }
         });
 
@@ -244,7 +273,7 @@ const AllStudentsPerClass = () => {
         message += `From: ${item.from_level} (${item.from_year})\n`;
         message += `To: ${item.to_level} (${item.to_year})\n`;
         message += `Status: ${item.status}\n`;
-        message += `Reason: ${item.reason || 'N/A'}\n`;
+        message += `Reason: ${item.reason || "N/A"}\n`;
 
         if (data.Summary) {
           message += `\n📊 Summary:\n`;
@@ -264,7 +293,6 @@ const AllStudentsPerClass = () => {
 
       await getStudents();
       setSelectedStudents([]);
-
     } catch (error) {
       console.error("Promotion Error:", error);
       let errorMessage = "❌ Promotion Failed!\n\n";
@@ -272,7 +300,7 @@ const AllStudentsPerClass = () => {
       if (error.response) {
         console.error("Error Response:", error.response.data);
         const errorData = error.response.data;
-        
+
         if (errorData.detail) {
           errorMessage += `Error: ${errorData.detail}\n`;
         } else if (errorData.error) {
@@ -287,7 +315,7 @@ const AllStudentsPerClass = () => {
           errorMessage += `\nDetails:\n`;
           errorData.result.forEach((item) => {
             if (item.status === "failed") {
-              errorMessage += `❌ ${item.student_name || 'Unknown'}: ${item.reason || 'Unknown error'}\n`;
+              errorMessage += `❌ ${item.student_name || "Unknown"}: ${item.reason || "Unknown error"}\n`;
             }
           });
         }
@@ -368,12 +396,12 @@ const AllStudentsPerClass = () => {
             message += `   From: ${item.from_level} (${item.from_year})\n`;
             message += `   To: ${item.to_level} (${item.to_year})\n`;
             message += `   Status: Success\n`;
-            message += `   Reason: ${item.reason || 'N/A'}\n\n`;
+            message += `   Reason: ${item.reason || "N/A"}\n\n`;
           } else if (item.status === "failed") {
             failedCount++;
             message += `❌ Student: ${item.student_name}\n`;
             message += `   Status: Failed\n`;
-            message += `   Reason: ${item.reason || 'Unknown error'}\n\n`;
+            message += `   Reason: ${item.reason || "Unknown error"}\n\n`;
           }
         });
 
@@ -387,7 +415,7 @@ const AllStudentsPerClass = () => {
         message += `From: ${item.from_level} (${item.from_year})\n`;
         message += `To: ${item.to_level} (${item.to_year})\n`;
         message += `Status: ${item.status}\n`;
-        message += `Reason: ${item.reason || 'N/A'}\n`;
+        message += `Reason: ${item.reason || "N/A"}\n`;
 
         if (data.Summary) {
           message += `\n📊 Summary:\n`;
@@ -408,7 +436,6 @@ const AllStudentsPerClass = () => {
       // Refresh the student list
       await getStudents();
       setSelectedStudents([]);
-
     } catch (error) {
       console.error("Demotion Error:", error);
       let errorMessage = "❌ Demotion Failed!\n\n";
@@ -416,7 +443,7 @@ const AllStudentsPerClass = () => {
       if (error.response) {
         console.error("Error Response:", error.response.data);
         const errorData = error.response.data;
-        
+
         if (errorData.detail) {
           errorMessage += `Error: ${errorData.detail}\n`;
         } else if (errorData.error) {
@@ -431,7 +458,7 @@ const AllStudentsPerClass = () => {
           errorMessage += `\nDetails:\n`;
           errorData.result.forEach((item) => {
             if (item.status === "failed") {
-              errorMessage += `❌ ${item.student_name || 'Unknown'}: ${item.reason || 'Unknown error'}\n`;
+              errorMessage += `❌ ${item.student_name || "Unknown"}: ${item.reason || "Unknown error"}\n`;
             }
           });
         }
@@ -465,9 +492,18 @@ const AllStudentsPerClass = () => {
     setGenderFilter(value);
   };
 
+  const handleStreamFilterChange = (e) => {
+    setStreamFilter(e.target.value);
+  };
+
+  // Clear the stream filter when moving to a class that has no streams
+  useEffect(() => {
+    if (!isSeniorClass) setStreamFilter("");
+  }, [isSeniorClass, id]);
+
   useEffect(() => {
     getStudents();
-  }, [id, genderFilter]);
+  }, [id, genderFilter, streamFilter]);
 
   const filteredStudents = students.filter((student) =>
     student.student_name?.toLowerCase().includes(searchTerm.toLowerCase())
@@ -534,14 +570,29 @@ const AllStudentsPerClass = () => {
               <option value="">All Genders</option>
               <option value="Male">Male</option>
               <option value="Female">Female</option>
-              <option value="Other">Other</option>
             </select>
+
+            {/* Stream Filter (Class 11 & 12 only) */}
+            {isSeniorClass && (
+              <select
+                value={streamFilter}
+                onChange={handleStreamFilterChange}
+                className="border px-3 py-2 rounded dark:bg-gray-700 dark:text-white dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full sm:w-auto"
+              >
+                <option value="">All Streams</option>
+                {STREAM_OPTIONS.map((stream) => (
+                  <option key={stream} value={stream}>
+                    {stream}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           {/* Student Count */}
           <div className="text-sm text-gray-500 dark:text-gray-400">
             <i className="fa-solid fa-users mr-1"></i>
-            {filteredStudents.length} student{filteredStudents.length !== 1 ? 's' : ''}
+            {filteredStudents.length} student{filteredStudents.length !== 1 ? "s" : ""}
           </div>
         </div>
 
@@ -568,6 +619,7 @@ const AllStudentsPerClass = () => {
                   </th>
                   <th className="px-6 py-4 font-semibold">S.No</th>
                   <th className="px-6 py-4 font-semibold">Student Name</th>
+                  {isSeniorClass && <th className="px-6 py-4 font-semibold">Stream</th>}
                 </tr>
               </thead>
 
@@ -575,10 +627,14 @@ const AllStudentsPerClass = () => {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {filteredStudents.length === 0 ? (
                   <tr>
-                    <td colSpan="3" className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
-                      {genderFilter ? (
+                    <td
+                      colSpan={isSeniorClass ? 4 : 3}
+                      className="px-6 py-8 text-center text-gray-500 dark:text-gray-400"
+                    >
+                      {genderFilter || streamFilter ? (
                         <span>
-                          No {genderFilter} students found in {levelName} for {yearLevelName || "this session"}.
+                          No {[genderFilter, streamFilter].filter(Boolean).join(" / ")} students found in{" "}
+                          {levelName} for {yearLevelName || "this session"}.
                         </span>
                       ) : (
                         `No students found in ${levelName} for ${yearLevelName || "this session"}.`
@@ -598,9 +654,7 @@ const AllStudentsPerClass = () => {
                           type="checkbox"
                           className="w-4 h-4 cursor-pointer accent-indigo-700"
                           checked={selectedStudents.includes(record.student_id)}
-                          onChange={() =>
-                            handleSelectStudent(record.student_id)
-                          }
+                          onChange={() => handleSelectStudent(record.student_id)}
                         />
                       </td>
 
@@ -618,6 +672,13 @@ const AllStudentsPerClass = () => {
                           {record.student_name || "Unnamed"}
                         </Link>
                       </td>
+
+                      {/* Stream (Class 11 & 12 only) */}
+                      {isSeniorClass && (
+                        <td className="px-6 py-4 text-gray-600 dark:text-gray-300">
+                          {record.section || "—"}
+                        </td>
+                      )}
                     </tr>
                   ))
                 )}
@@ -637,7 +698,7 @@ const AllStudentsPerClass = () => {
                   onClick={openPromotionModal}
                   disabled={selectedStudents.length === 0}
                   className={`bg-green-600 hover:bg-green-700 text-white btn px-6 py-2 rounded-lg transition
-                    ${selectedStudents.length === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-90'}`}
+                    ${selectedStudents.length === 0 ? "opacity-50 cursor-not-allowed" : "hover:opacity-90"}`}
                 >
                   <i className="fa-solid fa-arrow-up mr-2"></i>
                   Promote
@@ -647,7 +708,7 @@ const AllStudentsPerClass = () => {
                   onClick={openDemotionModal}
                   disabled={selectedStudents.length === 0}
                   className={`bg-red-600 hover:bg-red-700 text-white btn px-6 py-2 rounded-lg transition
-                    ${selectedStudents.length === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-90'}`}
+                    ${selectedStudents.length === 0 ? "opacity-50 cursor-not-allowed" : "hover:opacity-90"}`}
                 >
                   <i className="fa-solid fa-arrow-down mr-2"></i>
                   Demote
@@ -677,7 +738,7 @@ const AllStudentsPerClass = () => {
                   <option value="">Select target class</option>
                   {availablePromotionClasses.map((level) => (
                     <option key={level.id} value={level.id}>
-                      {level.name || level.year_level_name || `Class ${level.id}`}
+                      {level.name || level.level_name || level.year_level_name || `Class ${level.id}`}
                     </option>
                   ))}
                 </select>
@@ -737,7 +798,7 @@ const AllStudentsPerClass = () => {
                   <option value="">Select target class</option>
                   {availableDemotionClasses.map((level) => (
                     <option key={level.id} value={level.id}>
-                      {level.name || level.year_level_name || `Class ${level.id}`}
+                      {level.name || level.level_name || level.year_level_name || `Class ${level.id}`}
                     </option>
                   ))}
                 </select>
