@@ -53,7 +53,6 @@ const ExamSchedule = () => {
       const response = await axiosInstance.get("/d/Exam-Type/");
       return response.data;
     } catch (err) {
-      console.error("Failed to fetch exam types:", err);
       throw err;
     }
   };
@@ -134,7 +133,7 @@ const ExamSchedule = () => {
     if (classId && yearId && termId) {
       axiosInstance
         .get(
-          `/d/Exam-Schedule/get_by_class_year/?class_name=${classId}&school_year=${yearId}&term=${termId}`
+          `/d/Exam-Schedule/get_by_class_year/?class_name=${classId}&school_year=${yearId}&term=${termId}`,
         )
         .then((res) => setExistingSchedules(res.data))
         .catch((err) => setExistingSchedules([]));
@@ -146,7 +145,7 @@ const ExamSchedule = () => {
   const onSubmit = async (data) => {
     if (existingSchedules.length > 0) {
       setAlertMessage(
-        "Exam schedule for this class, school year and term already exists!"
+        "Exam schedule for this class, school year and term already exists!",
       );
       setShowAlert(true);
       return;
@@ -171,7 +170,7 @@ const ExamSchedule = () => {
 
       const response = await axiosInstance.post(
         "/d/Exam-Schedule/create_timetable/",
-        payload
+        payload,
       );
 
       if (response.status === 200 || response.status === 201) {
@@ -180,34 +179,27 @@ const ExamSchedule = () => {
         reset();
       } else {
         throw new Error(
-          response.data?.message || "Failed to create exam schedule"
+          response.data?.message || "Failed to create exam schedule",
         );
       }
     } catch (err) {
-      console.error("Backend error:", err);
-      let backendError = "Failed to create exam schedule";
+      const collectMessages = (value) => {
+        if (!value) return [];
+        if (typeof value === "string") return [value];
+        if (Array.isArray(value)) return value.flatMap(collectMessages);
+        if (typeof value === "object")
+          return Object.values(value).flatMap(collectMessages);
+        return [];
+      };
 
-      if (err.response) {
-        const data = err.response.data;
-        if (typeof data === "string") {
-          backendError = data;
-        } else if (Array.isArray(data)) {
-          backendError = data.join("\n");
-        } else if (data?.message) {
-          backendError = data.message;
-        } else {
-          backendError = Object.entries(data)
-            .map(
-              ([field, messages]) =>
-                `${field}: ${
-                  Array.isArray(messages) ? messages.join(", ") : messages
-                }`
-            )
-            .join("\n");
-        }
-      }
+      const data = err.response?.data;
+      const messages = [...new Set(collectMessages(data?.message ?? data))];
 
-      setAlertMessage(backendError);
+      setAlertMessage(
+        messages.length > 0
+          ? messages.join("\n")
+          : "Failed to create exam schedule",
+      );
       setShowAlert(true);
     }
   };
@@ -267,29 +259,6 @@ const ExamSchedule = () => {
                 </span>
               )}
             </div>
-            {/* <div className="form-control">
-              <label className="label">
-                <span className="label-text">School Year</span><span className="text-error">*</span>
-              </label>
-              <select
-                className="select select-bordered w-full"
-                {...register("school_year", {
-                  required: "School year is required",
-                })}
-              >
-                <option value="">Select Year</option>
-                {schoolYear?.map((student) => (
-                  <option key={student.id} value={student.id}>
-                    {student.year_name}
-                  </option>
-                ))}
-              </select>
-              {errors.school_year && (
-                <span className="text-red-500 text-sm mt-1">
-                  {errors.school_year.message}
-                </span>
-              )}
-            </div> */}
             {/* Added Term Dropdown */}
             <div className="form-control">
               <label className="label">
@@ -303,7 +272,7 @@ const ExamSchedule = () => {
                 <option value="">Select Term</option>
                 {terms?.map((term) => (
                   <option key={term.id} value={term.id}>
-                    {term.term_name || term.name || `Term ${term.id}`}
+                    Term {term.term_number} ({term.year})
                   </option>
                 ))}
               </select>
@@ -429,7 +398,7 @@ const ExamSchedule = () => {
                         });
                       } else {
                         setAlertMessage(
-                          "You can only add up to 4 more papers."
+                          "You can only add up to 4 more papers.",
                         );
                         setShowAlert(true);
                       }
