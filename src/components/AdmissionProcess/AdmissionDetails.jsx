@@ -15,6 +15,17 @@ import * as XLSX from "xlsx";
 const PAGE_SIZE = 7;
 const STUDENTS_URL = "s/students/student_details/";
 
+// "2026-09-08" -> "08-09-2026" (no timezone shifts, plain string handling)
+const formatDMY = (value) => {
+  if (!value) return "";
+  const m = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  const d = new Date(value);
+  return isNaN(d)
+    ? String(value)
+    : d.toLocaleDateString("en-GB").replaceAll("/", "-");
+};
+
 export const AdmissionDetails = () => {
   const { axiosInstance } = useContext(AuthContext);
   const [students, setStudents] = useState([]);
@@ -340,6 +351,14 @@ export const AdmissionDetails = () => {
       IFSC: s["bank details"]?.ifsc_code ?? "N/A",
       "Annual Income": s["annual income"] ?? s.annual_income ?? "",
       "School Year": s["school year"] ?? "",
+      // ---- newly added columns ----
+      "Admission Date": formatDMY(s.admission_date),
+      SSSMID: s.SSSMID ?? "",
+      FMID: s.FMID_number ?? "",
+      Height: s.height ?? "",
+      Weight: s.weight ?? "",
+      "Father's Qualification": s.father_education ?? "",
+      "Mother's Qualification": s.mother_education ?? "",
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(formattedData);
@@ -432,10 +451,19 @@ export const AdmissionDetails = () => {
       const annualIncome = fmtNumberIN(s["annual income"] ?? s.annual_income);
       const year = safe(s["school year"] ?? "");
 
+      // ---- newly added fields ----
+      const admissionDate = formatDMY(s.admission_date);
+      const fmidSssmid = `FM:${safe(s.FMID_number)}\nSSS:${safe(s.SSSMID)}`;
+      const heightWeight = `H:${safe(s.height)}\nW:${safe(s.weight)}`;
+      const qualification = `F:${safe(s.father_education)}\nM:${safe(
+        s.mother_education
+      )}`;
+
       return [
         id, schEnroll, name, className, age, gender, dob, catRel, siblings,
         active, rte, phone, email, parents, guardian, address, aadhaar, bank,
         annualIncome, year,
+        admissionDate, fmidSssmid, heightWeight, qualification,
       ];
     });
 
@@ -449,13 +477,14 @@ export const AdmissionDetails = () => {
           "ID", "Sch/En", "Name", "Class", "Age", "Gender", "DOB", "Cat/Rel",
           "Siblings", "Active", "RTE", "Phone", "Email", "Parents", "Guardian",
           "Address", "Aadhaar", "Bank", "Income", "Year",
+          "Adm. Date", "FMID/SSSMID", "Ht/Wt", "Qualif.",
         ],
       ],
       body,
       margin: { top: 15, left: margin, right: margin },
       styles: {
-        fontSize: 6.3,
-        cellPadding: 1.0,
+        fontSize: 5.8,
+        cellPadding: 0.9,
         overflow: "linebreak",
         valign: "middle",
       },
@@ -465,27 +494,32 @@ export const AdmissionDetails = () => {
         fontStyle: "bold",
       },
       alternateRowStyles: { fillColor: [248, 250, 252] },
+      // Total width = 398mm (A3 landscape usable width = 400mm)
       columnStyles: {
-        0: { cellWidth: 10, halign: "center" },
-        1: { cellWidth: 24 },
-        2: { cellWidth: 30 },
-        3: { cellWidth: 14 },
-        4: { cellWidth: 8, halign: "center" },
-        5: { cellWidth: 12 },
-        6: { cellWidth: 16 },
-        7: { cellWidth: 20 },
-        8: { cellWidth: 20, halign: "center" },
-        9: { cellWidth: 10, halign: "center" },
-        10: { cellWidth: 16 },
-        11: { cellWidth: 20 },
-        12: { cellWidth: 24 },
-        13: { cellWidth: 22 },
-        14: { cellWidth: 22 },
-        15: { cellWidth: 50 },
-        16: { cellWidth: 22 },
-        17: { cellWidth: 26 },
-        18: { cellWidth: 18, halign: "right" },
-        19: { cellWidth: 14 },
+        0: { cellWidth: 8, halign: "center" },
+        1: { cellWidth: 20 },
+        2: { cellWidth: 24 },
+        3: { cellWidth: 13 },
+        4: { cellWidth: 7, halign: "center" },
+        5: { cellWidth: 11 },
+        6: { cellWidth: 15 },
+        7: { cellWidth: 16 },
+        8: { cellWidth: 10, halign: "center" },
+        9: { cellWidth: 9, halign: "center" },
+        10: { cellWidth: 14 },
+        11: { cellWidth: 17 },
+        12: { cellWidth: 22 },
+        13: { cellWidth: 20 },
+        14: { cellWidth: 20 },
+        15: { cellWidth: 34 },
+        16: { cellWidth: 18 },
+        17: { cellWidth: 22 },
+        18: { cellWidth: 14, halign: "right" },
+        19: { cellWidth: 13 },
+        20: { cellWidth: 15 },
+        21: { cellWidth: 22 },
+        22: { cellWidth: 12 },
+        23: { cellWidth: 22 },
       },
       didDrawPage: (data) => {
         const pageCount = doc.internal.getNumberOfPages();
