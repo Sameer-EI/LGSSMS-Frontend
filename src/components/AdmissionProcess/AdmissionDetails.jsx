@@ -1,6 +1,7 @@
 import React, { useContext, useEffect, useState, useRef } from "react";
 import {
   fetchYearLevels,
+  fetchSchoolYear,
   deactivateStudents,
   fetchInactiveStudents,
   reactivateStudents,
@@ -36,6 +37,9 @@ export const AdmissionDetails = () => {
   const [yearLevels, setYearLevels] = useState([]);
   const [searchInput, setSearchInput] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
+  const [schoolYears, setSchoolYears] = useState([]);
+  const [selectedSchoolYear, setSelectedSchoolYear] = useState("");
+  const requestIdRef = useRef(0); // ignores out-of-date responses when filters change quickly
 
   // Pagination states
   const [currentPage, setCurrentPage] = useState(1);
@@ -89,12 +93,29 @@ export const AdmissionDetails = () => {
   // FETCHING (server-side paginated list + full download)
   // --------------------------------------------------------------
   // Fetches ONE page (1-based) and replaces the list with it.
+  // Server-side filters: ?level_id=<class id>&school_year_id=<school year id>
+  const buildFilterParams = () => {
+    const params = {};
+    if (selectedClass) params.level_id = selectedClass;
+    if (selectedSchoolYear) params.school_year_id = selectedSchoolYear;
+    return params;
+  };
+
   const getStudents = async ({ page = 1 } = {}) => {
+    const requestId = ++requestIdRef.current;
     setPageLoading(true);
     try {
       const { data } = await axiosInstance.get(STUDENTS_URL, {
-        params: { limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE },
+        params: {
+          ...buildFilterParams(),
+          limit: PAGE_SIZE,
+          offset: (page - 1) * PAGE_SIZE,
+        },
       });
+
+      // A newer request has started (filters changed) -> drop this response
+      if (requestId !== requestIdRef.current) return;
+
       const list = normalizeStudents(data);
 
       // Page became empty (e.g. last item on it was deactivated) -> go back one page
@@ -107,6 +128,7 @@ export const AdmissionDetails = () => {
       setHasNext(Boolean(data?.next));
       setTotalCount(typeof data?.count === "number" ? data.count : null);
     } catch (err) {
+      if (requestId !== requestIdRef.current) return; // a newer request took over
       console.log("Failed to fetch students", err);
       if (loading) {
         setError(true); // full-page error only on the first load
@@ -117,8 +139,10 @@ export const AdmissionDetails = () => {
         });
       }
     } finally {
-      setLoading(false);
-      setPageLoading(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+        setPageLoading(false);
+      }
     }
   };
 
@@ -141,12 +165,15 @@ export const AdmissionDetails = () => {
   // After deactivate/reactivate: reload the page the user is currently on
   const refreshStudents = () => getStudents({ page: currentPage });
 
-  // Fetches ALL students from the non-paginated API, then runs the given export.
+  // Fetches ALL matching students (current class / school year filters applied,
+  // no pagination), then runs the given export.
   const downloadAll = async (generate) => {
     setShowDownloadOptions(false);
     setDownloading(true);
     try {
-      const { data } = await axiosInstance.get(STUDENTS_URL);
+      const { data } = await axiosInstance.get(STUDENTS_URL, {
+        params: buildFilterParams(),
+      });
       generate(normalizeStudents(data));
     } catch (err) {
       console.error("Download failed:", err);
@@ -168,11 +195,26 @@ export const AdmissionDetails = () => {
     }
   };
 
+  const getSchoolYears = async () => {
+    try {
+      const data = await fetchSchoolYear();
+      setSchoolYears(Array.isArray(data) ? data : data?.results || []);
+    } catch (error) {
+      console.log("failed to fetch school years", error);
+    }
+  };
+
+  // Dropdown data (loaded once)
+  useEffect(() => {
+    getYearLevels();
+    getSchoolYears();
+  }, []);
+
+  // First load + every time a server-side filter changes -> back to page 1
   useEffect(() => {
     getStudents({ page: 1 });
-    getYearLevels();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [selectedClass, selectedSchoolYear]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -574,19 +616,12 @@ export const AdmissionDetails = () => {
     return (item.student_name || "").toLowerCase();
   };
 
+  // Class + school year are filtered on the server; only the date is client-side
   const filterData = students.filter((detail) => {
-    const classValue = (detail.year_level ?? detail.class ?? "")
-      .toLowerCase()
-      .trim();
-    const selectedClassValue = selectedClass.toLowerCase().trim();
-
-    const matchesClass =
-      selectedClass === "" ? true : classValue === selectedClassValue;
-
     const matchesDate = selectedDate
       ? detail.admission_date === selectedDate
       : true;
-    return matchesClass && matchesDate;
+    return matchesDate;
   });
 
   const filterBysearch = filterData.filter((detail) =>
@@ -608,10 +643,10 @@ export const AdmissionDetails = () => {
   // MAIN RENDER
   // --------------------------------------------------------------
   return (
-    <div className="p-6 bg-gray-100 dark:bg-gray-900 min-h-screen mb-24 md:mb-10">
+    <div className="p-3 sm:p-6 bg-gray-100 dark:bg-gray-900 min-h-screen mb-24 md:mb-10">
       {/* DELETE CONFIRM MODAL */}
       {showDeleteModal && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/30 z-50">
+        <div className="fixed inset-0 flex items-center justify-center bg-black/30 z-50 p-4">
           <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-sm shadow-md">
             <h2 className="text-lg font-semibold mb-3 dark:text-gray-100">
               Deactivate Student
@@ -677,7 +712,7 @@ export const AdmissionDetails = () => {
 
       {/* RESULT MODAL */}
       {resultModal && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/30 z-50">
+        <div className="fixed inset-0 flex items-center justify-center bg-black/30 z-50 p-4">
           <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-sm shadow-md">
             <div className="flex justify-center mb-4">
               {resultModal.type === "success" ? (
@@ -723,7 +758,7 @@ export const AdmissionDetails = () => {
         <div className="fixed inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm z-50 p-4">
           <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden border border-gray-100 dark:border-gray-700/50">
             {/* Header */}
-            <div className="flex items-center justify-between px-6 py-5 bg-gradient-to-r from-red-50 to-orange-50 dark:from-gray-800 dark:to-gray-800/80 border-b border-gray-200/60 dark:border-gray-700/60">
+            <div className="flex items-center justify-between px-4 sm:px-6 py-4 sm:py-5 bg-gradient-to-r from-red-50 to-orange-50 dark:from-gray-800 dark:to-gray-800/80 border-b border-gray-200/60 dark:border-gray-700/60">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-red-500/10 dark:bg-red-500/20 flex items-center justify-center">
                   <i className="fa-solid fa-user-slash text-red-500 dark:text-red-400 text-lg"></i>
@@ -747,7 +782,7 @@ export const AdmissionDetails = () => {
             </div>
 
             {/* Body */}
-            <div className="flex-1 overflow-y-auto p-6 bg-gray-50/50 dark:bg-gray-900/30">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-gray-50/50 dark:bg-gray-900/30">
               {inactiveLoading ? (
                 <div className="flex flex-col items-center justify-center py-16">
                   <div className="relative">
@@ -794,7 +829,7 @@ export const AdmissionDetails = () => {
                         key={id}
                         className="group bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm hover:shadow-md border border-gray-200/60 dark:border-gray-700/50 transition-all duration-200 hover:border-red-200 dark:hover:border-red-700/40"
                       >
-                        <div className="flex items-start gap-4">
+                        <div className="flex flex-col sm:flex-row items-start gap-3 sm:gap-4">
                           {/* Avatar */}
                           <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-red-100 to-red-200 dark:from-red-900/40 dark:to-red-800/30 flex items-center justify-center flex-shrink-0 shadow-inner">
                             <i className="fa-solid fa-user text-red-600 dark:text-red-400 text-base"></i>
@@ -855,7 +890,7 @@ export const AdmissionDetails = () => {
                           <button
                             onClick={() => handleReactivate(id)}
                             disabled={reactivatingId === id}
-                            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 flex-shrink-0 ${
+                            className={`flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 flex-shrink-0 w-full sm:w-auto ${
                               reactivatingId === id
                                 ? "bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500 cursor-not-allowed"
                                 : "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 dark:bg-emerald-900/20 dark:text-emerald-300 dark:border-emerald-800/50 dark:hover:bg-emerald-900/30 shadow-sm hover:shadow"
@@ -885,7 +920,7 @@ export const AdmissionDetails = () => {
       )}
 
       {/* Main Container */}
-      <div className="max-w-7xl mx-auto bg-white dark:bg-gray-800 shadow-lg rounded-lg p-6">
+      <div className="max-w-7xl mx-auto bg-white dark:bg-gray-800 shadow-lg rounded-lg p-4 sm:p-6">
         <div className="mb-6">
           <h1 className="text-2xl md:text-3xl font-bold text-gray-800 dark:text-gray-100 text-center mb-4 border-gray-200 dark:border-gray-700">
             <i className="fa-solid fa-clipboard-list w-5"></i> Student Details
@@ -893,10 +928,10 @@ export const AdmissionDetails = () => {
         </div>
 
         {/* relative + z-30 keeps the whole filter bar (and the dropdown) above the table */}
-        <div className="w-full px-5 relative z-30">
+        <div className="w-full px-0 sm:px-5 relative z-30">
           <div className="flex flex-wrap justify-between items-end gap-4 mb-6 w-full border-b border-gray-300 dark:border-gray-700 pb-4">
             {/* Left Side: Filters */}
-            <div className="flex flex-wrap items-end gap-4 w-full sm:w-auto">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap items-end gap-3 sm:gap-4 w-full lg:w-auto">
               <div className="flex flex-col w-full sm:w-auto">
                 <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Search By Class:
@@ -908,8 +943,26 @@ export const AdmissionDetails = () => {
                 >
                   <option value="">All Classes</option>
                   {yearLevels.map((level) => (
-                    <option key={level.id} value={level.level_name}>
+                    <option key={level.id} value={level.id}>
                       {level.level_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex flex-col w-full sm:w-auto">
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Search By School Year:
+                </label>
+                <select
+                  className="select select-bordered w-full focus:outline-none dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600"
+                  value={selectedSchoolYear}
+                  onChange={(e) => setSelectedSchoolYear(e.target.value)}
+                >
+                  <option value="">All School Years</option>
+                  {schoolYears.map((year) => (
+                    <option key={year.id} value={year.id}>
+                      {year.year_name}
                     </option>
                   ))}
                 </select>
@@ -931,10 +984,11 @@ export const AdmissionDetails = () => {
                 <button
                   onClick={() => {
                     setSelectedClass("");
+                    setSelectedSchoolYear("");
                     setSelectedDate("");
                     setSearchInput("");
                   }}
-                  className="btn bgTheme text-white"
+                  className="btn bgTheme text-white w-full sm:w-auto"
                 >
                   Reset Filters
                 </button>
@@ -946,12 +1000,16 @@ export const AdmissionDetails = () => {
                 ref={dropdownRef}
               >
                 <button
-                  className="btn bgTheme text-white flex items-center"
+                  className="btn bgTheme text-white flex items-center justify-center w-full sm:w-auto"
                   disabled={downloading}
                   onClick={() => setShowDownloadOptions((prev) => !prev)}
                 >
                   <i className="fa-solid fa-file-arrow-down mr-2"></i>
-                  {downloading ? "Preparing..." : "Download All Student Info"}
+                  {downloading
+                    ? "Preparing..."
+                    : selectedClass || selectedSchoolYear
+                    ? "Download Filtered Student Info"
+                    : "Download All Student Info"}
                   <i className="fa-solid fa-caret-down ml-2"></i>
                 </button>
 
@@ -975,12 +1033,12 @@ export const AdmissionDetails = () => {
             </div>
 
             {/* Right Side: Search + Inactive Icon */}
-            <div className="flex items-end gap-2 w-full sm:w-auto justify-end">
-              <div className="flex flex-col w-full sm:w-auto">
+            <div className="flex items-end gap-2 w-full lg:w-auto justify-end">
+              <div className="flex flex-col flex-1 lg:flex-none w-full lg:w-auto">
                 <input
                   type="text"
                   placeholder="Student Name"
-                  className="input input-bordered w-full sm:w-64 focus:outline-none dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600"
+                  className="input input-bordered w-full lg:w-64 focus:outline-none dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600"
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value.trimStart())}
                 />
@@ -1005,7 +1063,7 @@ export const AdmissionDetails = () => {
         ) : (
           <div
             ref={tableScrollRef}
-            className={`relative z-0 overflow-scroll max-h-[70vh] rounded-lg transition-opacity ${
+            className={`relative z-0 overflow-auto max-h-[70vh] rounded-lg transition-opacity ${
               pageLoading ? "opacity-50 pointer-events-none" : ""
             }`}
           >
@@ -1154,17 +1212,17 @@ export const AdmissionDetails = () => {
         {/* Pagination: Previous / Next */}
         {showPagination && (
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4">
-            <p className="text-sm text-gray-600 dark:text-gray-400">
+            <p className="text-sm text-gray-600 dark:text-gray-400 text-center sm:text-left">
               {totalCount !== null
                 ? `Showing ${rangeStart}-${rangeEnd} of ${totalCount}`
                 : `Showing ${rangeStart}-${rangeEnd}`}
             </p>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-3 w-full sm:w-auto">
               <button
                 onClick={handlePrevPage}
                 disabled={currentPage <= 1 || pageLoading}
-                className="btn bgTheme text-white px-6 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="btn bgTheme text-white px-4 sm:px-6 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <i className="fa-solid fa-chevron-left mr-2"></i>
                 Previous
@@ -1179,7 +1237,7 @@ export const AdmissionDetails = () => {
               <button
                 onClick={handleNextPage}
                 disabled={!hasNext || pageLoading}
-                className="btn bgTheme text-white px-6 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="btn bgTheme text-white px-4 sm:px-6 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {pageLoading ? "Loading..." : "Next"}
                 {!pageLoading && (
