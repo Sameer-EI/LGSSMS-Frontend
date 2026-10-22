@@ -590,7 +590,7 @@ const TeacherProfile = () => {
                             required: "Qualification is required",
                           })}
                           className="input input-bordered w-full text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
-                          disabled={true}
+                          // disabled={true}
                         />
                         {errors.qualification && (
                           <p className="text-red-500 text-xs mt-1">
@@ -610,7 +610,7 @@ const TeacherProfile = () => {
                             required: "Aadhaar number is required",
                           })}
                           className="input input-bordered w-full text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
-                          disabled={true}
+                          // disabled={true}
                         />
                         {errors.adhaar_no && (
                           <p className="text-red-500 text-xs mt-1">
@@ -630,7 +630,7 @@ const TeacherProfile = () => {
                             required: "PAN number is required",
                           })}
                           className="input input-bordered w-full text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
-                          disabled={true}
+                          // disabled={true}
                         />
                         {errors.pan_no && (
                           <p className="text-red-500 text-xs mt-1">

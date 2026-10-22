@@ -164,10 +164,17 @@ const CreateDiscount = () => {
         discounted_amount_percent: parseFloat(formData.discounted_amount_percent)
       };
 
-      await axiosInstance.post("/d/appliedfeediscounts/apply/", payload);
+      const res = await axiosInstance.post("/d/appliedfeediscounts/apply/", payload);
+
+      // API returns strings like "0.00" (truthy), so always convert to Number
+      const excess = Number(res?.data?.excess_carried_forward || 0);
 
       setAlertTitle("Create Discount");
-      setAlertMessage("Discount applied successfully!");
+      setAlertMessage(
+        excess > 0
+          ? `Discount applied successfully! ₹${excess.toFixed(2)} excess was credited to the next pending month.`
+          : "Discount applied successfully!"
+      );
       setShowAlert(true);
 
       // Reset fields

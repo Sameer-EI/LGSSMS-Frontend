@@ -118,7 +118,7 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
                             </Link>
                           </li>
                         )}
-                        {(role === constants.roles.officeStaff ||
+                        {/* {(role === constants.roles.officeStaff ||
                           role === constants.roles.director) && (
                           <li>
                             <Link
@@ -136,7 +136,7 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
                               Teacher Substitute
                             </Link>
                           </li>
-                        )}
+                        )} */}
                       </ul>
                     )}
                   </div>
@@ -249,19 +249,17 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
                         <li>
                           <Link
                             onClick={(e) =>
-                              handleNavigation(
-                                e,
-                                allRouterLink.subjectAssignment,
-                              )
+                              handleNavigation(e, allRouterLink.periodsByClass)
                             }
                             className="flex items-center gap-2 px-3 py-2 rounded-md 
                          hover:bg-blue-100 dark:hover:bg-gray-700 
                          transition text-gray-800 dark:text-gray-200"
                           >
-                            <i className="fa-solid fa-tasks w-5"></i> Assign
-                            Subjects
+                            <i className="fa-solid fa-clock w-5"></i> Subject
+                            Allocation
                           </Link>
                         </li>
+
                         <li>
                           <Link
                             onClick={(e) =>
@@ -281,14 +279,17 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
                         <li>
                           <Link
                             onClick={(e) =>
-                              handleNavigation(e, allRouterLink.periodsByClass)
+                              handleNavigation(
+                                e,
+                                allRouterLink.subjectAssignment,
+                              )
                             }
                             className="flex items-center gap-2 px-3 py-2 rounded-md 
                          hover:bg-blue-100 dark:hover:bg-gray-700 
                          transition text-gray-800 dark:text-gray-200"
                           >
-                            <i className="fa-solid fa-clock w-5"></i> Assigned
-                            Periods
+                            <i className="fa-solid fa-tasks w-5"></i>Class
+                            Timetable
                           </Link>
                         </li>
                         <li>
@@ -371,7 +372,7 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
               )}
 
             {/* Teaching */}
-            {role === constants.roles.teacher && isAuthenticated && (
+            {/* {role === constants.roles.teacher && isAuthenticated && (
               <div>
                 <h3 className="text-sm font-semibold text-gray-500 uppercase mb-2">
                   Teaching
@@ -392,10 +393,10 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
                   </li>
                 </ul>
               </div>
-            )}
+            )} */}
 
             {/* Student Attendance - teacher only */}
-            {/* {isAuthenticated && (
+            {isAuthenticated && (
               <div>
                 <h3 className="text-sm font-semibold text-gray-500 uppercase mb-2">
                   Student Attendance
@@ -467,7 +468,7 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
                   )}
                 </ul>
               </div>
-            )} */}
+            )}
 
             {/* Fees */}
             {isAuthenticated &&
@@ -755,19 +756,22 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
                     Reports
                   </h3>
                   <ul className="space-y-1">
-                    <li>
-                      <Link
-                        onClick={(e) =>
-                          handleNavigation(e, allRouterLink.attendanceRecord)
-                        }
-                        className="flex items-center gap-2 px-3 py-2 rounded-md 
+                    {(role === constants.roles.teacher ||
+                      role === constants.roles.student) && (
+                      <li>
+                        <Link
+                          onClick={(e) =>
+                            handleNavigation(e, allRouterLink.attendanceRecord)
+                          }
+                          className="flex items-center gap-2 px-3 py-2 rounded-md 
                          hover:bg-blue-100 dark:hover:bg-gray-700 
                          transition text-gray-800 dark:text-gray-200"
-                      >
-                        <i className="fa-solid fa-square-poll-vertical w-5"></i>{" "}
-                        Attendance Record
-                      </Link>
-                    </li>
+                        >
+                          <i className="fa-solid fa-square-poll-vertical w-5"></i>{" "}
+                          Attendance Record
+                        </Link>
+                      </li>
+                    )}
                     <li>
                       <Link
                         onClick={(e) =>

@@ -235,7 +235,7 @@ const Marksheet = () => {
                   </div>
                   <div className="flex-1 text-center ml-8 sm:ml-14 md:ml-18">
                     <h1 className="text-sm sm:text-lg md:text-2xl font-extrabold uppercase text-[#b91c1c] text-print-red tracking-tight sm:tracking-wider leading-tight">
-                      New Progressive Education Public School
+                      LGS
                     </h1>
                   </div>
                 </div>

@@ -8,6 +8,13 @@ import {
 } from "../../services/api/Api";
 import { AuthContext } from "../../context/AuthContext";
 
+// A marks cell counts as "filled" when it has a number in it (0 is valid)
+const isFilled = (value) =>
+  value !== "" &&
+  value !== null &&
+  value !== undefined &&
+  !Number.isNaN(Number(value));
+
 const StudentMarksFill = () => {
   const { axiosInstance } = useContext(AuthContext);
   const [schoolYear, setSchoolYear] = useState([]);
@@ -34,6 +41,7 @@ const StudentMarksFill = () => {
     setValue,
     reset,
     control,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm({
     defaultValues: {
@@ -45,6 +53,9 @@ const StudentMarksFill = () => {
     control,
     name: "marks_data",
   });
+
+  // Live values of the subject rows, used to decide if a row is being filled
+  const watchedRows = watch("marks_data");
 
   // --- Fetching Functions ---
 
@@ -105,7 +116,6 @@ const StudentMarksFill = () => {
     }
   };
 
-  // ⭐️ CRITICAL FIX: Updated API endpoint and parameter for Students
   const getStudents = async (classId) => {
     if (!classId) {
       setStudents([]);
@@ -117,13 +127,9 @@ const StudentMarksFill = () => {
     setStudents([]);
 
     try {
-      // ⭐️ Using the correct endpoint and query parameter as provided by the user
       const response = await axiosInstance.get(
         `/s/studentyearlevels/?level__id=${classId}`
       );
-
-      // Assuming the response data is an array of student objects
-      // with student_id and student_name properties.
       setStudents(response.data);
     } catch (err) {
       console.error("Failed to load students:", err);
@@ -178,22 +184,31 @@ const StudentMarksFill = () => {
     }
   }, [subjects1, append, remove]);
 
-  // Static data mapping (Unchanged)
   const examType = examType1;
   const className1 = className;
   const schoolYears = schoolYear;
   const teachers = teachers1;
   const students = Students;
 
-  // --- Submission Logic (Unchanged) ---
+  // --- Submission Logic ---
 
   const onSubmit = async (data) => {
-    // Restructure data for bulk submission
+    // Only subjects that have marks entered are sent; the rest are skipped
+    const filledRows = (data.marks_data || []).filter((item) =>
+      isFilled(item.marks)
+    );
+
+    if (filledRows.length === 0) {
+      setAlertMessage("Please enter marks for at least one subject.");
+      setShowAlert(true);
+      return;
+    }
+
     const payload = {
       school_year_id: parseInt(data.school_year),
       exam_type_id: parseInt(data.exam_type),
       year_level_id: parseInt(data.year_level),
-      data: data.marks_data.map((item) => ({
+      data: filledRows.map((item) => ({
         teacher_id: parseInt(item.teacher_id),
         subject_id: parseInt(item.subject_id),
         student_marks: [
@@ -214,31 +229,27 @@ const StudentMarksFill = () => {
       if (response.status === 200 || response.status === 201) {
         setAlertMessage("Student marks filled successfully!");
         setShowAlert(true);
-        // Reset form fields
         reset();
         setSelectedStudentId("");
         setSelectedStudentName("");
         remove();
-        setSubjects([]); // Clear subjects list
+        setSubjects([]);
       } else {
         throw new Error("Failed to create student marks");
       }
     } catch (error) {
       console.error("Error submitting form:", error);
-      if (error.response && error.response.data) {
-        const { errors } = error.response.data;
-        const formattedMessage = (errors || []).join("\n");
-        setAlertMessage(
-          formattedMessage || "An unexpected error occurred during submission."
-        );
+      const backendErrors = error.response?.data?.errors;
+      if (Array.isArray(backendErrors) && backendErrors.length > 0) {
+        setAlertMessage(backendErrors.join("\n"));
       } else {
-        setAlertMessage("An unexpected error occurred.");
+        setAlertMessage("An unexpected error occurred during submission.");
       }
       setShowAlert(true);
     }
   };
 
-  // --- Dropdown Click Outside Logic (Unchanged) ---
+  // --- Dropdown Click Outside Logic ---
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -257,7 +268,7 @@ const StudentMarksFill = () => {
     };
   }, []);
 
-  // --- Filtering Logic (Unchanged) ---
+  // --- Filtering Logic ---
 
   const filteredStudents = students
     .filter((studentObj) =>
@@ -439,16 +450,20 @@ const StudentMarksFill = () => {
 
           {/* --- Dynamic Subject Marks Table --- */}
           <div className="md:col-span-2 mt-10">
-            <h2 className="text-2xl font-semibold mb-4 text-gray-800 dark:text-gray-200 border-b pb-2">
+            <h2 className="text-2xl font-semibold mb-1 text-gray-800 dark:text-gray-200 border-b pb-2">
               Subject Marks Entry
             </h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+              Fill marks only for the subjects you want to record. Subjects left
+              blank are skipped. A teacher is needed for every subject that has
+              marks.
+            </p>
 
-            {/* ⭐️ SUBJECT LOADING BLOCK */}
             {loadingSubjects ? (
               <div className=" flex justify-center">
                 <p className="mt-2 text-gray-500 text-sm">
-                  Loading students...
-                </p>{" "}
+                  Loading subjects...
+                </p>
               </div>
             ) : fields.length > 0 ? (
               <div className="overflow-x-auto">
@@ -456,75 +471,83 @@ const StudentMarksFill = () => {
                   <thead>
                     <tr>
                       <th className="text-left w-1/3">Subject</th>
-                      <th className="text-left w-1/3">
-                        Teacher <span className="text-error">*</span>
-                      </th>
-                      <th className="text-left w-1/3">
-                        Marks <span className="text-error">*</span>
-                      </th>
+                      <th className="text-left w-1/3">Teacher</th>
+                      <th className="text-left w-1/3">Marks</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {fields.map((field, index) => (
-                      <tr
-                        key={field.id}
-                        className="hover:bg-gray-100 dark:hover:bg-gray-700 transition duration-150"
-                      >
-                        {/* Subject Name (Read Only) */}
-                        <td className="align-top py-4">
-                          <p className="font-medium text-gray-800 dark:text-gray-100">
-                            {field.subject_name}
-                          </p>
-                          <input
-                            type="hidden"
-                            {...register(`marks_data.${index}.subject_id`)}
-                            value={field.subject_id}
-                          />
-                        </td>
+                    {fields.map((field, index) => {
+                      // This row is "active" once marks have been typed in
+                      const rowHasMarks = isFilled(
+                        watchedRows?.[index]?.marks
+                      );
 
-                        {/* Teacher Selection */}
-                        <td className="align-top py-4">
-                          <select
-                            {...register(`marks_data.${index}.teacher_id`, {
-                              required: `Teacher for ${field.subject_name} is required`,
-                            })}
-                            className="select select-bordered w-full focus:outline-none dark:bg-gray-700 dark:text-white dark:border-gray-600"
-                          >
-                            <option value="">Select Teacher</option>
-                            {teachers?.map((teacher) => (
-                              <option key={teacher.id} value={teacher.id}>
-                                {teacher.first_name} {teacher.last_name}
-                              </option>
-                            ))}
-                          </select>
-                          {errors.marks_data?.[index]?.teacher_id && (
-                            <p className="text-red-500 text-sm mt-1">
-                              {errors.marks_data[index].teacher_id.message}
+                      return (
+                        <tr
+                          key={field.id}
+                          className="hover:bg-gray-100 dark:hover:bg-gray-700 transition duration-150"
+                        >
+                          {/* Subject Name (Read Only) */}
+                          <td className="align-top py-4">
+                            <p className="font-medium text-gray-800 dark:text-gray-100">
+                              {field.subject_name}
                             </p>
-                          )}
-                        </td>
+                            <input
+                              type="hidden"
+                              {...register(`marks_data.${index}.subject_id`)}
+                              value={field.subject_id}
+                            />
+                          </td>
 
-                        {/* Marks Input */}
-                        <td className="align-top py-4">
-                          <input
-                            type="number"
-                            placeholder="Enter marks"
-                            {...register(`marks_data.${index}.marks`, {
-                              required: `${field.subject_name} marks are required`,
-                              min: { value: 0, message: "Min 0" },
-                              max: { value: 100, message: "Max 100" },
-                              valueAsNumber: true,
-                            })}
-                            className="input input-bordered w-full focus:outline-none dark:bg-gray-700 dark:text-white dark:border-gray-600"
-                          />
-                          {errors.marks_data?.[index]?.marks && (
-                            <p className="text-red-500 text-sm mt-1">
-                              {errors.marks_data[index].marks.message}
-                            </p>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                          {/* Teacher Selection: required only if marks are entered */}
+                          <td className="align-top py-4">
+                            <select
+                              {...register(`marks_data.${index}.teacher_id`, {
+                                required: rowHasMarks
+                                  ? `Select the teacher for ${field.subject_name}`
+                                  : false,
+                              })}
+                              className="select select-bordered w-full focus:outline-none dark:bg-gray-700 dark:text-white dark:border-gray-600"
+                            >
+                              <option value="">Select Teacher</option>
+                              {teachers?.map((teacher) => (
+                                <option key={teacher.id} value={teacher.id}>
+                                  {teacher.first_name} {teacher.last_name}
+                                </option>
+                              ))}
+                            </select>
+                            {errors.marks_data?.[index]?.teacher_id && (
+                              <p className="text-red-500 text-sm mt-1">
+                                {errors.marks_data[index].teacher_id.message}
+                              </p>
+                            )}
+                          </td>
+
+                          {/* Marks Input: optional, 0-100 when provided */}
+                          <td className="align-top py-4">
+                            <input
+                              type="number"
+                              placeholder="Enter marks"
+                              {...register(`marks_data.${index}.marks`, {
+                                validate: (value) => {
+                                  if (!isFilled(value)) return true; // blank is fine
+                                  const n = Number(value);
+                                  if (n < 0) return "Min 0";
+                                  if (n > 100) return "Max 100";
+                                  return true;
+                                },
+                              })}
+                              className="input input-bordered w-full focus:outline-none dark:bg-gray-700 dark:text-white dark:border-gray-600"
+                            />
+                            {errors.marks_data?.[index]?.marks && (
+                              <p className="text-red-500 text-sm mt-1">
+                                {errors.marks_data[index].marks.message}
+                              </p>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

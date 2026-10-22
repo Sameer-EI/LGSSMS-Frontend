@@ -1,6 +1,5 @@
 import React, { useContext, useEffect, useState, useRef } from "react";
 import {
-  // fetchAdmissionDetails, // Remove this import
   fetchYearLevels,
   deactivateStudents,
   fetchInactiveStudents,
@@ -13,19 +12,40 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
 
+const PAGE_SIZE = 7;
+const STUDENTS_URL = "s/students/student_details/";
+
+// "2026-09-08" -> "08-09-2026" (no timezone shifts, plain string handling)
+const formatDMY = (value) => {
+  if (!value) return "";
+  const m = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  const d = new Date(value);
+  return isNaN(d)
+    ? String(value)
+    : d.toLocaleDateString("en-GB").replaceAll("/", "-");
+};
+
 export const AdmissionDetails = () => {
   const { axiosInstance } = useContext(AuthContext);
-  const [details, setDetails] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [students, setStudents] = useState([]);
+  const [loading, setLoading] = useState(true); // first load only
+  const [pageLoading, setPageLoading] = useState(false); // next/prev loading
+  const [downloading, setDownloading] = useState(false);
   const [selectedClass, setSelectedClass] = useState("");
   const [yearLevels, setYearLevels] = useState([]);
   const [searchInput, setSearchInput] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
 
+  // Pagination states
+  const [currentPage, setCurrentPage] = useState(1);
+  const [hasNext, setHasNext] = useState(false);
+  const [totalCount, setTotalCount] = useState(null);
+
   const [error, setError] = useState(false);
   const [showDownloadOptions, setShowDownloadOptions] = useState(false);
   const dropdownRef = useRef(null);
-  const [studentData, setStudentData] = useState([]);
+  const tableScrollRef = useRef(null);
 
   // Delete States
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -66,35 +86,76 @@ export const AdmissionDetails = () => {
   };
 
   // --------------------------------------------------------------
-  // Fetch all student data from the new API endpoint
+  // FETCHING (server-side paginated list + full download)
   // --------------------------------------------------------------
-  const fetchAllStudentData = async () => {
+  // Fetches ONE page (1-based) and replaces the list with it.
+  const getStudents = async ({ page = 1 } = {}) => {
+    setPageLoading(true);
     try {
-      const res = await axiosInstance.get("s/students/student_details/");
-      return normalizeStudents(res.data);
+      const { data } = await axiosInstance.get(STUDENTS_URL, {
+        params: { limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE },
+      });
+      const list = normalizeStudents(data);
+
+      // Page became empty (e.g. last item on it was deactivated) -> go back one page
+      if (list.length === 0 && page > 1) {
+        return getStudents({ page: page - 1 });
+      }
+
+      setStudents(list);
+      setCurrentPage(page);
+      setHasNext(Boolean(data?.next));
+      setTotalCount(typeof data?.count === "number" ? data.count : null);
     } catch (err) {
-      console.error("Error fetching all students for download:", err);
-      alert("Failed to load complete data. Please try again.");
-      return [];
+      console.log("Failed to fetch students", err);
+      if (loading) {
+        setError(true); // full-page error only on the first load
+      } else {
+        setResultModal({
+          type: "error",
+          message: "Failed to load students. Please try again.",
+        });
+      }
+    } finally {
+      setLoading(false);
+      setPageLoading(false);
     }
   };
 
-  // --------------------------------------------------------------
-  // Fetch admission details from the new API endpoint
-  // --------------------------------------------------------------
-  const getAdmissionDetails = async () => {
+  const scrollTableToTop = () => {
+    if (tableScrollRef.current) tableScrollRef.current.scrollTop = 0;
+  };
+
+  const handleNextPage = async () => {
+    if (!hasNext || pageLoading) return;
+    await getStudents({ page: currentPage + 1 });
+    scrollTableToTop();
+  };
+
+  const handlePrevPage = async () => {
+    if (currentPage <= 1 || pageLoading) return;
+    await getStudents({ page: currentPage - 1 });
+    scrollTableToTop();
+  };
+
+  // After deactivate/reactivate: reload the page the user is currently on
+  const refreshStudents = () => getStudents({ page: currentPage });
+
+  // Fetches ALL students from the non-paginated API, then runs the given export.
+  const downloadAll = async (generate) => {
+    setShowDownloadOptions(false);
+    setDownloading(true);
     try {
-      setLoading(true);
-      // Directly fetch from the new API endpoint
-      const response = await axiosInstance.get("s/students/student_details/");
-      const data = normalizeStudents(response.data);
-      setDetails(data);
-      setStudentData(data); // Use the same data for downloads
-      setLoading(false);
-    } catch (error) {
-      console.log("Failed to fetch admission details", error);
-      setError(true);
-      setLoading(false);
+      const { data } = await axiosInstance.get(STUDENTS_URL);
+      generate(normalizeStudents(data));
+    } catch (err) {
+      console.error("Download failed:", err);
+      setResultModal({
+        type: "error",
+        message: "Failed to download student data. Please try again.",
+      });
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -108,8 +169,9 @@ export const AdmissionDetails = () => {
   };
 
   useEffect(() => {
-    getAdmissionDetails();
+    getStudents({ page: 1 });
     getYearLevels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Close dropdown on outside click
@@ -164,13 +226,12 @@ export const AdmissionDetails = () => {
         studentToDelete.student_id ??
         studentToDelete.id;
 
-      // Get the reason
-      const reason = deactivationReason === "Others" ? customReason : deactivationReason;
+      const reason =
+        deactivationReason === "Others" ? customReason : deactivationReason;
 
-      // Call deactivateStudents with both parameters
       await deactivateStudents([studentId], reason);
 
-      await getAdmissionDetails(); // refresh both details & studentData
+      await refreshStudents();
 
       setShowDeleteModal(false);
       setStudentToDelete(null);
@@ -202,22 +263,20 @@ export const AdmissionDetails = () => {
     setInactiveLoading(true);
     try {
       const response = await fetchInactiveStudents();
-      console.log("Inactive students response:", response);
 
       // Handle different response formats
-      let students = [];
+      let list = [];
       if (response && response.results && Array.isArray(response.results)) {
-        students = response.results;
+        list = response.results;
       } else if (Array.isArray(response)) {
-        students = response;
+        list = response;
       } else if (response && response.data && Array.isArray(response.data)) {
-        students = response.data;
-      } else if (response && typeof response === 'object') {
-        students = [response];
+        list = response.data;
+      } else if (response && typeof response === "object") {
+        list = [response];
       }
 
-      console.log("Processed inactive students:", students);
-      setInactiveStudents(students);
+      setInactiveStudents(list);
     } catch (err) {
       console.error("Failed to fetch inactive students:", err);
       setInactiveStudents([]);
@@ -236,13 +295,13 @@ export const AdmissionDetails = () => {
     try {
       await reactivateStudents([studentId]);
 
-      // Remove from local list
+      // Remove from local inactive list
       setInactiveStudents((prev) =>
         prev.filter((s) => (s.id ?? s.student_id) !== studentId)
       );
 
-      // Refresh main list and studentData
-      await getAdmissionDetails();
+      // Refresh main list (stays on the current page)
+      await refreshStudents();
 
       setResultModal({
         type: "success",
@@ -260,10 +319,9 @@ export const AdmissionDetails = () => {
   };
 
   // --------------------------------------------------------------
-  // DOWNLOAD FUNCTIONS (use studentData, already all records)
+  // DOWNLOAD FUNCTIONS (receive the full, already-normalized list)
   // --------------------------------------------------------------
-  const handleDownloadExcel = (input = []) => {
-    const data = normalizeStudents(input);
+  const handleDownloadExcel = (data) => {
     if (!data.length) return;
 
     const formattedData = data.map((s) => ({
@@ -293,6 +351,14 @@ export const AdmissionDetails = () => {
       IFSC: s["bank details"]?.ifsc_code ?? "N/A",
       "Annual Income": s["annual income"] ?? s.annual_income ?? "",
       "School Year": s["school year"] ?? "",
+      // ---- newly added columns ----
+      "Admission Date": formatDMY(s.admission_date),
+      SSSMID: s.SSSMID ?? "",
+      FMID: s.FMID_number ?? "",
+      Height: s.height ?? "",
+      Weight: s.weight ?? "",
+      "Father's Qualification": s.father_education ?? "",
+      "Mother's Qualification": s.mother_education ?? "",
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(formattedData);
@@ -301,8 +367,7 @@ export const AdmissionDetails = () => {
     XLSX.writeFile(workbook, "Student_Details_Report.xlsx");
   };
 
-  const handleDownloadStudentDataPDF = (input = []) => {
-    const data = normalizeStudents(input);
+  const handleDownloadStudentDataPDF = (data) => {
     if (!data.length) return;
 
     const doc = new jsPDF({
@@ -333,10 +398,10 @@ export const AdmissionDetails = () => {
       return isNaN(date)
         ? String(d)
         : date.toLocaleDateString(undefined, {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-        });
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+          });
     };
     const fmtNumberIN = (n) => {
       if (n === null || n === undefined || n === "" || n === "N/A")
@@ -345,8 +410,8 @@ export const AdmissionDetails = () => {
       return Number.isNaN(num)
         ? String(n)
         : new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(
-          num
-        );
+            num
+          );
     };
     const safe = (v) => (v === null || v === undefined ? "" : String(v));
 
@@ -383,15 +448,22 @@ export const AdmissionDetails = () => {
       const bankAcc = safe(s["bank details"]?.account_no ?? "N/A");
       const ifsc = safe(s["bank details"]?.ifsc_code ?? "N/A");
       const bank = `A/C:${bankAcc}\nIFSC:${ifsc}`;
-      const annualIncome = fmtNumberIN(
-        s["annual income"] ?? s.annual_income
-      );
+      const annualIncome = fmtNumberIN(s["annual income"] ?? s.annual_income);
       const year = safe(s["school year"] ?? "");
+
+      // ---- newly added fields ----
+      const admissionDate = formatDMY(s.admission_date);
+      const fmidSssmid = `FM:${safe(s.FMID_number)}\nSSS:${safe(s.SSSMID)}`;
+      const heightWeight = `H:${safe(s.height)}\nW:${safe(s.weight)}`;
+      const qualification = `F:${safe(s.father_education)}\nM:${safe(
+        s.mother_education
+      )}`;
 
       return [
         id, schEnroll, name, className, age, gender, dob, catRel, siblings,
         active, rte, phone, email, parents, guardian, address, aadhaar, bank,
         annualIncome, year,
+        admissionDate, fmidSssmid, heightWeight, qualification,
       ];
     });
 
@@ -405,13 +477,14 @@ export const AdmissionDetails = () => {
           "ID", "Sch/En", "Name", "Class", "Age", "Gender", "DOB", "Cat/Rel",
           "Siblings", "Active", "RTE", "Phone", "Email", "Parents", "Guardian",
           "Address", "Aadhaar", "Bank", "Income", "Year",
+          "Adm. Date", "FMID/SSSMID", "Ht/Wt", "Qualif.",
         ],
       ],
       body,
       margin: { top: 15, left: margin, right: margin },
       styles: {
-        fontSize: 6.3,
-        cellPadding: 1.0,
+        fontSize: 5.8,
+        cellPadding: 0.9,
         overflow: "linebreak",
         valign: "middle",
       },
@@ -421,27 +494,32 @@ export const AdmissionDetails = () => {
         fontStyle: "bold",
       },
       alternateRowStyles: { fillColor: [248, 250, 252] },
+      // Total width = 398mm (A3 landscape usable width = 400mm)
       columnStyles: {
-        0: { cellWidth: 10, halign: "center" },
-        1: { cellWidth: 24 },
-        2: { cellWidth: 30 },
-        3: { cellWidth: 14 },
-        4: { cellWidth: 8, halign: "center" },
-        5: { cellWidth: 12 },
-        6: { cellWidth: 16 },
-        7: { cellWidth: 20 },
-        8: { cellWidth: 20, halign: "center" },
-        9: { cellWidth: 10, halign: "center" },
-        10: { cellWidth: 16 },
-        11: { cellWidth: 20 },
-        12: { cellWidth: 24 },
-        13: { cellWidth: 22 },
-        14: { cellWidth: 22 },
-        15: { cellWidth: 50 },
-        16: { cellWidth: 22 },
-        17: { cellWidth: 26 },
-        18: { cellWidth: 18, halign: "right" },
-        19: { cellWidth: 14 },
+        0: { cellWidth: 8, halign: "center" },
+        1: { cellWidth: 20 },
+        2: { cellWidth: 24 },
+        3: { cellWidth: 13 },
+        4: { cellWidth: 7, halign: "center" },
+        5: { cellWidth: 11 },
+        6: { cellWidth: 15 },
+        7: { cellWidth: 16 },
+        8: { cellWidth: 10, halign: "center" },
+        9: { cellWidth: 9, halign: "center" },
+        10: { cellWidth: 14 },
+        11: { cellWidth: 17 },
+        12: { cellWidth: 22 },
+        13: { cellWidth: 20 },
+        14: { cellWidth: 20 },
+        15: { cellWidth: 34 },
+        16: { cellWidth: 18 },
+        17: { cellWidth: 22 },
+        18: { cellWidth: 14, halign: "right" },
+        19: { cellWidth: 13 },
+        20: { cellWidth: 15 },
+        21: { cellWidth: 22 },
+        22: { cellWidth: 12 },
+        23: { cellWidth: 22 },
       },
       didDrawPage: (data) => {
         const pageCount = doc.internal.getNumberOfPages();
@@ -460,7 +538,7 @@ export const AdmissionDetails = () => {
   };
 
   // --------------------------------------------------------------
-  // ERROR / LOADING / NO DATA
+  // ERROR / LOADING
   // --------------------------------------------------------------
   if (error) {
     return (
@@ -486,37 +564,9 @@ export const AdmissionDetails = () => {
     );
   }
 
-  if (!details) {
-    return <div className="p-4 text-center">No admission records found</div>;
-  }
-
-  const filterData = details.filter((detail) => {
-    const classValue = (detail.year_level ?? detail.class ?? "").toLowerCase().trim();
-    const selectedClassValue = selectedClass.toLowerCase().trim();
-
-    const matchesClass = selectedClass === ""
-      ? true
-      : classValue === selectedClassValue;
-
-    const matchesDate = selectedDate
-      ? detail.admission_date === selectedDate
-      : true;
-    return matchesClass && matchesDate;
-  });
-
-  const filterBysearch = filterData.filter((detail) => {
-    const search = searchInput.toLowerCase();
-    // Handle both possible data structures
-    let studentName = "";
-    if (detail.student_input) {
-      studentName = `${detail.student_input.first_name ?? ""} ${detail.student_input.last_name ?? ""}`.toLowerCase();
-    } else {
-      studentName = (detail.student_name || "").toLowerCase();
-    }
-    return studentName.startsWith(search);
-  });
-
-  // FIXED: Proper sorting function
+  // --------------------------------------------------------------
+  // FILTER + SORT (client-side, on the current page)
+  // --------------------------------------------------------------
   const getStudentName = (item) => {
     if (item.student_input) {
       return `${item.student_input.first_name ?? ""} ${item.student_input.last_name ?? ""}`.toLowerCase();
@@ -524,11 +574,35 @@ export const AdmissionDetails = () => {
     return (item.student_name || "").toLowerCase();
   };
 
-  const sortedData = [...filterBysearch].sort((a, b) => {
-    const nameA = getStudentName(a);
-    const nameB = getStudentName(b);
-    return nameA.localeCompare(nameB);
+  const filterData = students.filter((detail) => {
+    const classValue = (detail.year_level ?? detail.class ?? "")
+      .toLowerCase()
+      .trim();
+    const selectedClassValue = selectedClass.toLowerCase().trim();
+
+    const matchesClass =
+      selectedClass === "" ? true : classValue === selectedClassValue;
+
+    const matchesDate = selectedDate
+      ? detail.admission_date === selectedDate
+      : true;
+    return matchesClass && matchesDate;
   });
+
+  const filterBysearch = filterData.filter((detail) =>
+    getStudentName(detail).startsWith(searchInput.toLowerCase())
+  );
+
+  const sortedData = [...filterBysearch].sort((a, b) =>
+    getStudentName(a).localeCompare(getStudentName(b))
+  );
+
+  // Pagination display helpers
+  const totalPages =
+    totalCount !== null ? Math.max(1, Math.ceil(totalCount / PAGE_SIZE)) : null;
+  const rangeStart = students.length ? (currentPage - 1) * PAGE_SIZE + 1 : 0;
+  const rangeEnd = (currentPage - 1) * PAGE_SIZE + students.length;
+  const showPagination = currentPage > 1 || hasNext;
 
   // --------------------------------------------------------------
   // MAIN RENDER
@@ -588,7 +662,10 @@ export const AdmissionDetails = () => {
               </button>
               <button
                 onClick={handleConfirmDelete}
-                disabled={deleteLoading || (deactivationReason === "Others" && !customReason.trim())}
+                disabled={
+                  deleteLoading ||
+                  (deactivationReason === "Others" && !customReason.trim())
+                }
                 className="btn bgTheme text-white flex items-center"
               >
                 {deleteLoading ? "Deactivating..." : "Deactivate"}
@@ -614,10 +691,11 @@ export const AdmissionDetails = () => {
               )}
             </div>
             <h2
-              className={`text-lg font-semibold text-center mb-2 ${resultModal.type === "success"
-                ? "text-green-700"
-                : "text-red-700"
-                }`}
+              className={`text-lg font-semibold text-center mb-2 ${
+                resultModal.type === "success"
+                  ? "text-green-700"
+                  : "text-red-700"
+              }`}
             >
               {resultModal.type === "success" ? "Success!" : "Failed!"}
             </h2>
@@ -627,10 +705,11 @@ export const AdmissionDetails = () => {
             <div className="flex justify-center">
               <button
                 onClick={() => setResultModal(null)}
-                className={`btn text-white px-8 ${resultModal.type === "success"
-                  ? "bg-green-500 hover:bg-green-600"
-                  : "bg-red-500 hover:bg-red-600"
-                  }`}
+                className={`btn text-white px-8 ${
+                  resultModal.type === "success"
+                    ? "bg-green-500 hover:bg-green-600"
+                    : "bg-red-500 hover:bg-red-600"
+                }`}
               >
                 OK
               </button>
@@ -639,12 +718,11 @@ export const AdmissionDetails = () => {
         </div>
       )}
 
-      {/* INACTIVE STUDENTS MODAL - Professional Layout */}
+      {/* INACTIVE STUDENTS MODAL */}
       {showInactiveModal && (
         <div className="fixed inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm z-50 p-4">
           <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden border border-gray-100 dark:border-gray-700/50">
-
-            {/* Header - Premium Design */}
+            {/* Header */}
             <div className="flex items-center justify-between px-6 py-5 bg-gradient-to-r from-red-50 to-orange-50 dark:from-gray-800 dark:to-gray-800/80 border-b border-gray-200/60 dark:border-gray-700/60">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-red-500/10 dark:bg-red-500/20 flex items-center justify-center">
@@ -655,7 +733,8 @@ export const AdmissionDetails = () => {
                     Inactive Students
                   </h2>
                   <p className="text-xs text-gray-500 dark:text-gray-400 font-medium">
-                    {inactiveStudents.length} inactive {inactiveStudents.length === 1 ? 'student' : 'students'}
+                    {inactiveStudents.length} inactive{" "}
+                    {inactiveStudents.length === 1 ? "student" : "students"}
                   </p>
                 </div>
               </div>
@@ -667,7 +746,7 @@ export const AdmissionDetails = () => {
               </button>
             </div>
 
-            {/* Body - Enhanced Scrolling Area */}
+            {/* Body */}
             <div className="flex-1 overflow-y-auto p-6 bg-gray-50/50 dark:bg-gray-900/30">
               {inactiveLoading ? (
                 <div className="flex flex-col items-center justify-center py-16">
@@ -701,13 +780,13 @@ export const AdmissionDetails = () => {
 
                     const formattedDateTime = deactivationDate
                       ? new Date(deactivationDate).toLocaleString("en-IN", {
-                        day: "2-digit",
-                        month: "short",
-                        year: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        hour12: true,
-                      })
+                          day: "2-digit",
+                          month: "short",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          hour12: true,
+                        })
                       : "";
 
                     return (
@@ -728,10 +807,11 @@ export const AdmissionDetails = () => {
                                 {name}
                               </h4>
                               <span
-                                className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${hasTC
-                                  ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-                                  : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400"
-                                  }`}
+                                className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                  hasTC
+                                    ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                                    : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400"
+                                }`}
                               >
                                 {hasTC ? (
                                   <>
@@ -750,7 +830,10 @@ export const AdmissionDetails = () => {
                             {reason && (
                               <div className="mt-1 flex items-start gap-1.5">
                                 <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
-                                  <span className="font-medium text-gray-700 dark:text-gray-300">Reason:</span> {reason}
+                                  <span className="font-medium text-gray-700 dark:text-gray-300">
+                                    Reason:
+                                  </span>{" "}
+                                  {reason}
                                 </p>
                               </div>
                             )}
@@ -759,7 +842,10 @@ export const AdmissionDetails = () => {
                               <div className="mt-1.5 flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
                                 <i className="fa-regular fa-calendar text-[11px]"></i>
                                 <span>
-                                  <span className="font-medium text-gray-600 dark:text-gray-300">Deactivation Date & Time:</span> {formattedDateTime}
+                                  <span className="font-medium text-gray-600 dark:text-gray-300">
+                                    Deactivation Date & Time:
+                                  </span>{" "}
+                                  {formattedDateTime}
                                 </span>
                               </div>
                             )}
@@ -769,10 +855,11 @@ export const AdmissionDetails = () => {
                           <button
                             onClick={() => handleReactivate(id)}
                             disabled={reactivatingId === id}
-                            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 flex-shrink-0 ${reactivatingId === id
-                              ? "bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500 cursor-not-allowed"
-                              : "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 dark:bg-emerald-900/20 dark:text-emerald-300 dark:border-emerald-800/50 dark:hover:bg-emerald-900/30 shadow-sm hover:shadow"
-                              }`}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 flex-shrink-0 ${
+                              reactivatingId === id
+                                ? "bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500 cursor-not-allowed"
+                                : "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 dark:bg-emerald-900/20 dark:text-emerald-300 dark:border-emerald-800/50 dark:hover:bg-emerald-900/30 shadow-sm hover:shadow"
+                            }`}
                           >
                             {reactivatingId === id ? (
                               <>
@@ -805,7 +892,8 @@ export const AdmissionDetails = () => {
           </h1>
         </div>
 
-        <div className="w-full px-5">
+        {/* relative + z-30 keeps the whole filter bar (and the dropdown) above the table */}
+        <div className="w-full px-5 relative z-30">
           <div className="flex flex-wrap justify-between items-end gap-4 mb-6 w-full border-b border-gray-300 dark:border-gray-700 pb-4">
             {/* Left Side: Filters */}
             <div className="flex flex-wrap items-end gap-4 w-full sm:w-auto">
@@ -852,35 +940,31 @@ export const AdmissionDetails = () => {
                 </button>
               </div>
 
+              {/* Download dropdown (always fetches ALL students) */}
               <div
-                className="mt-1 w-full sm:w-auto relative group"
+                className="mt-1 w-full sm:w-auto relative z-30"
                 ref={dropdownRef}
               >
                 <button
                   className="btn bgTheme text-white flex items-center"
+                  disabled={downloading}
                   onClick={() => setShowDownloadOptions((prev) => !prev)}
                 >
-                  <i className="fa-solid fa-file-arrow-down mr-2"></i> Download
-                  All Student Info
+                  <i className="fa-solid fa-file-arrow-down mr-2"></i>
+                  {downloading ? "Preparing..." : "Download All Student Info"}
                   <i className="fa-solid fa-caret-down ml-2"></i>
                 </button>
 
                 {showDownloadOptions && (
-                  <div className="absolute z-10 mt-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg">
+                  <div className="absolute left-0 top-full z-50 mt-2 min-w-full whitespace-nowrap bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg overflow-hidden">
                     <button
-                      onClick={() => {
-                        handleDownloadStudentDataPDF(studentData);
-                        setShowDownloadOptions(false);
-                      }}
+                      onClick={() => downloadAll(handleDownloadStudentDataPDF)}
                       className="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-600"
                     >
                       Download as PDF
                     </button>
                     <button
-                      onClick={() => {
-                        handleDownloadExcel(studentData);
-                        setShowDownloadOptions(false);
-                      }}
+                      onClick={() => downloadAll(handleDownloadExcel)}
                       className="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-600"
                     >
                       Download as Excel (.xlsx)
@@ -902,7 +986,6 @@ export const AdmissionDetails = () => {
                 />
               </div>
 
-              {/* Inactive Students Icon */}
               <button
                 onClick={handleInactiveClick}
                 title="View Inactive Students"
@@ -920,7 +1003,12 @@ export const AdmissionDetails = () => {
             No admission records found.
           </p>
         ) : (
-          <div className="overflow-scroll max-h-[70vh] rounded-lg">
+          <div
+            ref={tableScrollRef}
+            className={`relative z-0 overflow-scroll max-h-[70vh] rounded-lg transition-opacity ${
+              pageLoading ? "opacity-50 pointer-events-none" : ""
+            }`}
+          >
             <div className="inline-block min-w-full align-middle rounded-lg">
               <div className="shadow-sm ring-1 ring-black ring-opacity-5 rounded-lg">
                 <table className="min-w-full divide-gray-300 dark:divide-gray-700">
@@ -948,7 +1036,8 @@ export const AdmissionDetails = () => {
                         RTE
                       </th>
                       <th className="px-4 py-3 text-left text-sm font-semibold text-nowrap">
-                        Admission Date                      </th>
+                        Admission Date
+                      </th>
                       <th className="px-8 py-3 text-left text-sm font-semibold text-nowrap">
                         Status
                       </th>
@@ -960,9 +1049,11 @@ export const AdmissionDetails = () => {
                   <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
                     {sortedData.length > 0 ? (
                       sortedData.map((detail) => {
-                        // Determine if student has student_input nested object or flat structure
+                        // Nested (student_input) or flat structure
                         const hasNestedStudent = detail.student_input;
-                        const student = hasNestedStudent ? detail.student_input : detail;
+                        const student = hasNestedStudent
+                          ? detail.student_input
+                          : detail;
 
                         return (
                           <tr
@@ -971,28 +1062,20 @@ export const AdmissionDetails = () => {
                           >
                             <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-gray-100">
                               {hasNestedStudent
-                                ? `${detail.student_input.first_name ?? ""} ${detail.student_input.last_name ?? ""}`
+                                ? `${student.first_name ?? ""} ${student.last_name ?? ""}`
                                 : detail.student_name ?? ""}
                             </td>
                             <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-gray-100">
-                              {hasNestedStudent
-                                ? detail.student_input.father_name ?? ""
-                                : detail.father_name ?? ""}
+                              {student.father_name ?? ""}
                             </td>
                             <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-gray-100">
-                              {hasNestedStudent
-                                ? detail.student_input.mother_name ?? ""
-                                : detail.mother_name ?? ""}
+                              {student.mother_name ?? ""}
                             </td>
                             <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-300">
-                              {hasNestedStudent
-                                ? detail.student_input.date_of_birth ?? ""
-                                : detail.date_of_birth ?? ""}
+                              {student.date_of_birth ?? ""}
                             </td>
                             <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-300">
-                              {hasNestedStudent
-                                ? detail.student_input.gender ?? ""
-                                : detail.gender ?? ""}
+                              {student.gender ?? ""}
                             </td>
                             <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-300">
                               {detail.year_level ?? detail.class ?? ""}
@@ -1003,16 +1086,17 @@ export const AdmissionDetails = () => {
                             <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-300">
                               {detail.admission_date
                                 ? new Date(detail.admission_date)
-                                  .toLocaleDateString("en-GB")
-                                  .replaceAll("/", "-")
+                                    .toLocaleDateString("en-GB")
+                                    .replaceAll("/", "-")
                                 : ""}
                             </td>
                             <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-300">
                               <span
-                                className={`inline-flex items-center px-4 py-1 rounded-full text-xs font-medium ${student.is_active || detail.is_active
-                                  ? "bg-green-100 text-green-800"
-                                  : "bg-red-100 text-red-800"
-                                  }`}
+                                className={`inline-flex items-center px-4 py-1 rounded-full text-xs font-medium ${
+                                  student.is_active || detail.is_active
+                                    ? "bg-green-100 text-green-800"
+                                    : "bg-red-100 text-red-800"
+                                }`}
                               >
                                 {student.is_active || detail.is_active
                                   ? "Active"
@@ -1063,6 +1147,45 @@ export const AdmissionDetails = () => {
                   </tbody>
                 </table>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Pagination: Previous / Next */}
+        {showPagination && (
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4">
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              {totalCount !== null
+                ? `Showing ${rangeStart}-${rangeEnd} of ${totalCount}`
+                : `Showing ${rangeStart}-${rangeEnd}`}
+            </p>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handlePrevPage}
+                disabled={currentPage <= 1 || pageLoading}
+                className="btn bgTheme text-white px-6 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <i className="fa-solid fa-chevron-left mr-2"></i>
+                Previous
+              </button>
+
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300 min-w-[90px] text-center">
+                {totalPages
+                  ? `Page ${currentPage} of ${totalPages}`
+                  : `Page ${currentPage}`}
+              </span>
+
+              <button
+                onClick={handleNextPage}
+                disabled={!hasNext || pageLoading}
+                className="btn bgTheme text-white px-6 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {pageLoading ? "Loading..." : "Next"}
+                {!pageLoading && (
+                  <i className="fa-solid fa-chevron-right ml-2"></i>
+                )}
+              </button>
             </div>
           </div>
         )}
