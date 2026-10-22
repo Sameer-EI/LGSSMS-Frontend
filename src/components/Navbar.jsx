@@ -160,7 +160,6 @@ const handleLogout = async () => {
               </svg>
             </label>
           )}
-          {/* <span className="nexus-logo text-xl md:text-2xl ml-2">New Progressive</span> */}
           <img src={logo} alt="Logo" className="mainLogo" />
         </div>
 
