@@ -14,9 +14,10 @@ export const constants = {
   // baseUrl: "https://94f38xkg-8000.inc1.devtunnels.ms", //naaz
   // baseUrl: "https://p0209tcw-8000.inc1.devtunnels.ms", //naaz eduethical
   //  baseUrl:"https://187gwsw1-8000.inc1.devtunnels.ms/", //farha
-  // baseUrl: "https://smsproject.pythonanywhere.com/", //dev EduEthical
-  // baseUrl: "https://lgsschool.eduethical.com/", //dev EduEthical  
-  baseUrl: "https://api.lgsschool.eduethical.com", //prod EduEthical  
+  //  baseUrl:"https://p0209tcw-7000.inc1.devtunnels.ms/", //naaz
+  baseUrl: "https://smsproject.pythonanywhere.com/", //dev EduEthical
+  // baseUrl: "https://lgsschool.eduethical.com/", //dev EduEthical    
+  // baseUrl: "https://api.lgsschool.eduethical.com", //prod EduEthical  
 
 
 

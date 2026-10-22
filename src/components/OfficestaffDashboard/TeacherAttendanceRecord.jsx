@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   fetchTeacherAttendanceRecords,
   updateTeacherAttendance,
@@ -6,8 +7,39 @@ import {
   updateOfficeStaffAttendance,
 } from "../../services/api/Api";
 
+// ---------- Data mappers (API <-> UI) ----------
+const STATUS_FROM_API = { P: "present", A: "absent", L: "leave" };
+const STATUS_TO_API = { present: "P", absent: "A", leave: "L" };
+
+const normalizeTeacher = (r) => ({
+  ...r,
+  date: r.marked_at,
+  status: STATUS_FROM_API[r.status] || "absent",
+  teacher_name: r.teacher_name || "N/A",
+});
+
+const normalizeStaff = (r) => ({
+  ...r,
+  date: r.marked_at,
+  status: STATUS_FROM_API[r.status] || "absent",
+  office_staff_name: r.office_staff_name || "N/A",
+});
+
+// Local date (toISOString gives the UTC date, which is "yesterday" in IST before 5:30 AM)
+const getLocalToday = () => {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
 const TeacherAttendanceRecord = () => {
-  const [activeTab, setActiveTab] = useState("teachers");
+  // Active tab is read from the URL (?tab=teachers | ?tab=staff)
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get("tab") === "staff" ? "staff" : "teachers";
+
+  const setActiveTab = (tab) => {
+    setSearchParams({ tab }, { replace: true });
+  };
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -15,7 +47,7 @@ const TeacherAttendanceRecord = () => {
   const [alertMessage, setAlertMessage] = useState("");
   const [alertTitle, setAlertTitle] = useState("Attendance");
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = getLocalToday();
 
   // ---------- Teacher states ----------
   const [teacherRecords, setTeacherRecords] = useState([]);
@@ -46,8 +78,8 @@ const TeacherAttendanceRecord = () => {
           fetchOfficeStaffAttendanceRecords(),
         ]);
 
-        setTeacherRecords(tData);
-        setStaffRecords(sData);
+        setTeacherRecords((tData || []).map(normalizeTeacher));
+        setStaffRecords((sData || []).map(normalizeStaff));
 
         setTeacherSearchDate(today);
         setStaffSearchDate(today);
@@ -113,10 +145,12 @@ const TeacherAttendanceRecord = () => {
 
     setTeacherUpdating(true);
     try {
-      await updateTeacherAttendance(
-        selectedTeacherRecord.id,
-        selectedTeacherRecord
-      );
+      // Convert back to the API format (P / A / L)
+      await updateTeacherAttendance(selectedTeacherRecord.id, {
+        teacher: selectedTeacherRecord.teacher,
+        marked_at: selectedTeacherRecord.date,
+        status: STATUS_TO_API[selectedTeacherRecord.status],
+      });
 
       setTeacherRecords((prev) =>
         prev.map((r) =>
@@ -163,10 +197,12 @@ const TeacherAttendanceRecord = () => {
 
     setStaffUpdating(true);
     try {
-      await updateOfficeStaffAttendance(
-        selectedStaffRecord.id,
-        selectedStaffRecord
-      );
+      // Convert back to the API format (P / A / L)
+      await updateOfficeStaffAttendance(selectedStaffRecord.id, {
+        office_staff: selectedStaffRecord.office_staff,
+        marked_at: selectedStaffRecord.date,
+        status: STATUS_TO_API[selectedStaffRecord.status],
+      });
 
       setStaffRecords((prev) =>
         prev.map((r) =>
@@ -264,7 +300,7 @@ const TeacherAttendanceRecord = () => {
                     type="date"
                     value={teacherSearchDate}
                     onChange={(e) => setTeacherSearchDate(e.target.value)}
-                    max={new Date().toISOString().split("T")[0]}
+                    max={today}
                     className="border px-3 py-2 rounded w-full dark:bg-gray-700 dark:text-white dark:border-gray-600"
                   />
                 </div>
@@ -335,12 +371,10 @@ const TeacherAttendanceRecord = () => {
                 <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
                   {teacherFilteredRecords.length > 0 ? (
                     [...teacherFilteredRecords]
-                      .sort((a, b) =>{
-                         const nameA = a.teacher_name || "N/A";
-                        const nameB = b.teacher_name || "N/A";
-                        return nameA.localeCompare(nameB)
-                        // a.teacher_name.localeCompare(b.teacher_name)
-                      }
+                      .sort((a, b) =>
+                        (a.teacher_name || "N/A").localeCompare(
+                          b.teacher_name || "N/A"
+                        )
                       )
                       .map((record) => (
                         <tr
@@ -414,7 +448,7 @@ const TeacherAttendanceRecord = () => {
                     type="date"
                     value={staffSearchDate}
                     onChange={(e) => setStaffSearchDate(e.target.value)}
-                    max={new Date().toISOString().split("T")[0]}
+                    max={today}
                     className="border px-3 py-2 rounded w-full dark:bg-gray-700 dark:text-white dark:border-gray-600"
                   />
                 </div>
@@ -485,12 +519,11 @@ const TeacherAttendanceRecord = () => {
                 <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
                   {staffFilteredRecords.length > 0 ? (
                     [...staffFilteredRecords]
-                      .sort((a, b) =>{
-                        const nameA = a.office_staff_name || "N/A";
-                        const nameB = b.office_staff_name || "N/A";
-                        return nameA.localeCompare(nameB)
-                        // a.office_staff_name.localeCompare(b.office_staff_name)
-                      })
+                      .sort((a, b) =>
+                        (a.office_staff_name || "N/A").localeCompare(
+                          b.office_staff_name || "N/A"
+                        )
+                      )
                       .map((record) => (
                         <tr
                           key={record.id}
@@ -610,13 +643,13 @@ const TeacherAttendanceRecord = () => {
               onChange={handleStaffStatusChange}
               className="w-full border px-3 py-2 rounded mb-4"
             >
-              <option value="Absent" className="dark:text-black">
+              <option value="absent" className="dark:text-black">
                 Absent
               </option>
-              <option value="Leave" className="dark:text-black">
+              <option value="leave" className="dark:text-black">
                 Leave
               </option>
-              <option value="Present" className="dark:text-black">
+              <option value="present" className="dark:text-black">
                 Present
               </option>
             </select>

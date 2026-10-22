@@ -223,7 +223,7 @@ export const ViewFeesDetails = () => {
               <img src={img} alt="logo Not found" className="logoImg" />
               <div className="flex flex-col items-end">
                 <h2 className="text-xl font-bold uppercase leading-tight text-center text-black">
-                  New Progressive Education Public School
+                  LGS
                 </h2>
                 <div className="mt-2 text-sm text-gray-700 text-center w-full">
                   <p className="leading-tight font-bold text-black">

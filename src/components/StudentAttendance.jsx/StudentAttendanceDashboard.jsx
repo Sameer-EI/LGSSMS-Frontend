@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import Chart from "react-apexcharts";
-import { fetchAttendanceData } from "../../services/api/Api";
+import { fetchAttendanceData, fetchYearLevels } from "../../services/api/Api";
 import { fetchAttendanceDefaulters } from "../../services/api/StudentAttendanceApi";
 import { constants } from "../../global/constants";
 import { useNavigate } from "react-router-dom";
@@ -39,6 +39,7 @@ const StudentAttendanceDashboard = () => {
   const [defaultersLoading, setDefaultersLoading] = useState(true);
   const [defaultersError, setDefaultersError] = useState(null);
   const [totalDefaulters, setTotalDefaulters] = useState(0);
+  const [yearLevels, setYearLevels] = useState([]);
 
   const getTodayDateString = () => {
     const now = new Date();
@@ -64,6 +65,15 @@ const StudentAttendanceDashboard = () => {
       attributeFilter: ["class"],
     });
     return () => observer.disconnect();
+  }, []);
+
+  // Year levels (loaded once) — used for the "All classes, Nursery - Class 12" subtitle
+  useEffect(() => {
+    const loadYearLevels = async () => {
+      const levels = await fetchYearLevels();
+      setYearLevels(Array.isArray(levels) ? levels : []);
+    };
+    loadYearLevels();
   }, []);
 
   // Daily attendance (date-driven)
@@ -147,6 +157,20 @@ const StudentAttendanceDashboard = () => {
       present: cls.present,
       total: cls.total,
     }));
+
+  // Subtitle built from the year levels API (lowest -> highest level_order)
+  const sortedYearLevels = [...yearLevels].sort(
+    (a, b) => a.level_order - b.level_order,
+  );
+
+  const yearLevelRange =
+    sortedYearLevels.length > 0
+      ? sortedYearLevels.length === 1
+        ? `All classes, ${sortedYearLevels[0].level_name}`
+        : `All classes, ${sortedYearLevels[0].level_name} - ${
+            sortedYearLevels[sortedYearLevels.length - 1].level_name
+          }`
+      : "All classes";
 
   // Worst-first
   const sortedDefaulters = [...defaulters].sort(
@@ -297,7 +321,7 @@ const StudentAttendanceDashboard = () => {
                 Daily Attendance Report
               </h1>
               <p className="text-gray-500 dark:text-gray-400 text-sm">
-                All classes, Grade 1-12
+                {yearLevelRange}
               </p>
             </div>
             <div className="flex items-center gap-4">

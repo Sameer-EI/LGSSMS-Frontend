@@ -1,5 +1,6 @@
 import React, { useContext, useEffect, useRef, useState } from "react";
 import { AuthContext } from "../../../context/AuthContext";
+import { fetchYearLevels } from "../../../services/api/Api";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -22,6 +23,9 @@ const NewAdmissionList = () => {
   const [showDownloadOptions, setShowDownloadOptions] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
+  // Class options loaded from the year-levels API
+  const [apiClasses, setApiClasses] = useState([]);
+
   const dropdownRef = useRef(null);
 
   const [filters, setFilters] = useState({
@@ -39,6 +43,29 @@ const NewAdmissionList = () => {
 
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
+  }, []);
+
+  // ------------------------------------------------------------
+  // LOAD CLASSES (YEAR LEVELS) FROM API
+  // ------------------------------------------------------------
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadClasses = async () => {
+      try {
+        const data = await fetchYearLevels();
+        const list = Array.isArray(data) ? data : data?.results || [];
+        const names = list.map((l) => l?.level_name).filter(Boolean);
+        if (!cancelled) setApiClasses([...new Set(names)]);
+      } catch (err) {
+        console.error("Failed to load classes:", err);
+      }
+    };
+
+    loadClasses();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // ------------------------------------------------------------
@@ -104,6 +131,16 @@ const NewAdmissionList = () => {
   };
 
   // ------------------------------------------------------------
+  // CLASS OPTIONS: from the API, falling back to classes found in the data
+  // ------------------------------------------------------------
+  const derivedClasses = [
+    ...new Set(
+      allStudents.map((s) => (s.year_level || "").trim()).filter(Boolean)
+    ),
+  ];
+  const classOptions = apiClasses.length ? apiClasses : derivedClasses;
+
+  // ------------------------------------------------------------
   // FILTER ALL STUDENTS (NOT just current page)
   // ------------------------------------------------------------
   const getFilteredAllStudents = () => {
@@ -120,10 +157,10 @@ const NewAdmissionList = () => {
           .toLowerCase()
           .includes(search);
 
-      // ✅ Fixed: Exact match with normalization
+      // Exact match with normalization
       const studentClass = (student.year_level || "").trim();
       const filterClass = (filters.year_level || "").trim();
-      
+
       const matchesClass = !filters.year_level || studentClass === filterClass;
 
       return matchesSearch && matchesClass;
@@ -158,7 +195,7 @@ const NewAdmissionList = () => {
     try {
       // Use already fetched allStudents or fetch if empty
       let dataToExport = allStudents;
-      
+
       if (!dataToExport.length) {
         dataToExport = await fetchAllStudents();
         setAllStudents(dataToExport);
@@ -180,7 +217,7 @@ const NewAdmissionList = () => {
 
         const studentClass = (student.year_level || "").trim();
         const filterClass = (filters.year_level || "").trim();
-        
+
         const matchesClass = !filters.year_level || studentClass === filterClass;
 
         return matchesSearch && matchesClass;
@@ -283,7 +320,7 @@ const NewAdmissionList = () => {
       align: "right",
     });
     doc.text(`School Year: ${schoolYear}`, margin, 18);
-    
+
     // Add filter info if applied
     if (filters.year_level) {
       doc.text(`Class Filter: ${filters.year_level}`, margin, 24);
@@ -427,15 +464,15 @@ const NewAdmissionList = () => {
                 }}
               >
                 <option value="">All Classes</option>
-                {[...Array(12)].map((_, i) => (
-                  <option key={i} value={`Class ${i + 1}`}>
-                    Class {i + 1}
+                {classOptions.map((cls) => (
+                  <option key={cls} value={cls}>
+                    {cls}
                   </option>
                 ))}
               </select>
 
-              <button 
-                className="btn bgTheme text-white" 
+              <button
+                className="btn bgTheme text-white"
                 onClick={resetFilters}
               >
                 Reset
@@ -500,7 +537,7 @@ const NewAdmissionList = () => {
             </p>
             {filters.year_level && (
               <p className="text-sm text-gray-400 mt-2">
-                No students found in Class {filters.year_level}
+                No students found in {filters.year_level}
               </p>
             )}
           </div>
@@ -571,7 +608,7 @@ const NewAdmissionList = () => {
         <div className="flex justify-between items-center mt-6">
           <p className="text-sm text-gray-600 dark:text-gray-300">
             Showing {displayStudents.length} of {displayCount} Students
-            {filters.year_level && ` in Class ${filters.year_level}`}
+            {filters.year_level && ` in ${filters.year_level}`}
           </p>
           <div className="join">
             <button

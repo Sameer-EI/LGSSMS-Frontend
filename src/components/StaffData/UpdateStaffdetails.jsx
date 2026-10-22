@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import { useForm } from "react-hook-form";
 import {
   fetchTeachers,
   fetchOfficeStaff,
@@ -8,203 +9,183 @@ import {
   fetchCountry,
   fetchState,
   fetchCity,
+  fetchSubjects,
 } from "../../services/api/Api";
-import { useForm } from "react-hook-form";
+import { constants } from "../../global/constants";
 import UpdateSuccessful from "../Modals/UpdateModal";
 
-const UpdateStaffDetails = () => {
-  const { id, type } = useParams();
-  const navigate = useNavigate();
+/* -------------------------------------------------------------------------- */
+/* Constants & helpers                                                        */
+/* -------------------------------------------------------------------------- */
 
-  const [countries, setCountries] = useState([]);
-  const [states, setStates] = useState([]);
-  const [cities, setCities] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [updateModal, setUpdateModal] = useState(false);
-  const [formErrors, setFormErrors] = useState([]);
-  const [submitting, setSubmitting] = useState(false);
-  const [showCountryDropdown, setShowCountryDropdown] = useState(false);
-  const [showStateDropdown, setShowStateDropdown] = useState(false);
-  const [showCityDropdown, setShowCityDropdown] = useState(false);
+const CADRE_CHOICES = [
+  { value: "PRT", hint: "Primary Teacher" },
+  { value: "TGT", hint: "Trained Graduate Teacher" },
+  { value: "PGT", hint: "Post Graduate Teacher" },
+];
 
-  // const { register, handleSubmit, setValue, watch, formState: { errors }, trigger } = useForm({
-  //   mode: "onChange",
-  //   reValidateMode: "onChange"
-  // });
+const MAX_IMAGE_MB = 2;
 
-  const { register, handleSubmit, setValue, watch, formState: { errors } } = useForm({
-    mode: "onChange", // important for live validation
-    reValidateMode: "onChange"
+const RULES = {
+  first_name: { pattern: /^[A-Za-z]{2,30}$/, message: "First name must be 2-30 letters" },
+  middle_name: { pattern: /^[A-Za-z]{0,30}$/, message: "Middle name must be letters only" },
+  last_name: { pattern: /^[A-Za-z]{2,30}$/, message: "Last name must be 2-30 letters" },
+  email: { pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "Invalid email format" },
+  phone_no: { pattern: /^[6-9][0-9]{9}$/, message: "Must be 10 digits starting with 6-9" },
+  adhaar_no: { pattern: /^[2-9][0-9]{11}$/, message: "Must be 12 digits starting with 2-9" },
+  pan_no: { pattern: /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/, message: "Invalid PAN format (e.g. ABCDE1234F)" },
+  qualification: { pattern: /^[A-Za-z0-9\s\-,.]{2,50}$/, message: "Invalid qualification" },
+  account_no: { pattern: /^[0-9]{9,18}$/, message: "Account number must be 9-18 digits" },
+  ifsc_code: { pattern: /^[A-Z]{4}0[A-Z0-9]{6}$/, message: "Invalid IFSC code (e.g. SBIN0001234)" },
+  holder_name: { pattern: /^[A-Za-z ]{2,50}$/, message: "Holder name must be letters only" },
+  house_no: { pattern: /^[A-Za-z0-9\-/ ]{1,10}$/, message: "Invalid house number" },
+  habitation: { pattern: /^[A-Za-z0-9 ]{1,50}$/, message: "Invalid habitation" },
+  ward_no: { pattern: /^[0-9]{1,5}$/, message: "Invalid ward number" },
+  zone_no: { pattern: /^[0-9]{1,5}$/, message: "Invalid zone number" },
+  block: { pattern: /^[A-Za-z0-9 ]{0,50}$/, message: "Invalid block" },
+  district: { pattern: /^[A-Za-z ]{1,50}$/, message: "Invalid district" },
+  division: { pattern: /^[A-Za-z ]{0,50}$/, message: "Invalid division" },
+  area_code: { pattern: /^[0-9]{3,10}$/, message: "Invalid area code" },
+  address_line: { pattern: /^[A-Za-z0-9,.\-/ ]{0,100}$/, message: "Invalid address line" },
+};
+
+const digitsOnly = (max) => (v) => v.replace(/\D/g, "").slice(0, max);
+const upper = (max) => (v) => v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, max);
+
+const getError = (errors, name) => name.split(".").reduce((o, k) => o?.[k], errors);
+
+const resolveImageUrl = (path) => {
+  if (!path) return null;
+  return /^(https?:|blob:|data:)/.test(path) ? path : `${constants.baseUrl}${path}`;
+};
+
+const normalizeList = (data) => {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.results)) return data.results;
+  if (Array.isArray(data?.data)) return data.data;
+  return [];
+};
+
+const subjectLabel = (s) => s?.name || s?.subject_name || s?.title || `Subject ${s?.id}`;
+const subjectId = (subject) => (subject && typeof subject === "object" ? subject.id : subject);
+
+// Cascading dropdown support: only filters when the API actually exposes the parent key
+const refId = (v) => (v && typeof v === "object" ? v.id : v);
+const supportsParent = (list, key) => list.some((i) => refId(i?.[key]) != null);
+const filterByParent = (list, key, parentId) => {
+  if (!parentId || !supportsParent(list, key)) return list;
+  return list.filter((i) => String(refId(i[key])) === String(parentId));
+};
+const byName = (a, b) => a.name.localeCompare(b.name);
+
+const collectErrors = (obj) => {
+  if (!obj) return [];
+  if (typeof obj === "string") return [obj];
+  if (obj instanceof Error) return [obj.message];
+  if (Array.isArray(obj)) return obj.flatMap(collectErrors);
+  if (typeof obj === "object") return Object.values(obj).flatMap(collectErrors);
+  return [];
+};
+
+/* -------------------------------------------------------------------------- */
+/* Reusable form pieces                                                       */
+/* -------------------------------------------------------------------------- */
+
+const Section = ({ title, description, children }) => (
+  <section className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm">
+    <div className="px-5 pt-5 pb-3 border-b border-gray-100 dark:border-gray-700">
+      <h2 className="text-base font-semibold text-gray-800 dark:text-gray-100">{title}</h2>
+      {description && <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{description}</p>}
+    </div>
+    <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-5">{children}</div>
+  </section>
+);
+
+const Field = ({ id, label, required, error, hint, full, children }) => (
+  <div className={`flex flex-col gap-1.5 ${full ? "sm:col-span-2 lg:col-span-3" : ""}`}>
+    <label htmlFor={id} className="text-sm font-medium text-gray-700 dark:text-gray-200">
+      {label}
+      {required && <span className="text-red-500 ml-0.5">*</span>}
+    </label>
+    {children}
+    {hint && !error && <p className="text-xs text-gray-500 dark:text-gray-400">{hint}</p>}
+    {error && (
+      <p role="alert" className="text-xs text-red-500">
+        {error}
+      </p>
+    )}
+  </div>
+);
+
+const TextField = ({
+  name,
+  label,
+  register,
+  errors,
+  required,
+  rules,
+  hint,
+  type = "text",
+  transform,
+  readOnly,
+  inputMode,
+  full,
+}) => {
+  const error = getError(errors, name)?.message;
+  const reg = register(name, {
+    required: required ? `${label} is required` : false,
+    ...(rules ? { pattern: { value: rules.pattern, message: rules.message } } : {}),
   });
+  return (
+    <Field id={name} label={label} required={required} error={error} hint={hint} full={full}>
+      <input
+        id={name}
+        type={type}
+        inputMode={inputMode}
+        readOnly={readOnly}
+        {...reg}
+        onChange={(e) => {
+          if (transform) e.target.value = transform(e.target.value);
+          reg.onChange(e);
+        }}
+        className={`input input-bordered w-full text-sm dark:bg-gray-700 dark:text-gray-200 ${
+          error ? "input-error" : "dark:border-gray-600"
+        } ${readOnly ? "bg-gray-50 dark:bg-gray-900 text-gray-500 cursor-not-allowed" : ""}`}
+      />
+    </Field>
+  );
+};
 
+const SelectField = ({ name, label, register, errors, required, options, placeholder, onChange, disabled, hint }) => {
+  const error = getError(errors, name)?.message;
+  const reg = register(name, { required: required ? `${label} is required` : false });
+  return (
+    <Field id={name} label={label} required={required} error={error} hint={hint}>
+      <select
+        id={name}
+        disabled={disabled}
+        {...reg}
+        onChange={(e) => {
+          reg.onChange(e);
+          onChange?.(e);
+        }}
+        className={`select select-bordered w-full text-sm dark:bg-gray-700 dark:text-gray-200 ${
+          error ? "select-error" : "dark:border-gray-600"
+        }`}
+      >
+        <option value="">{placeholder}</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </Field>
+  );
+};
 
-  const countryVal = watch("address_data.country");
-  const stateVal = watch("address_data.state");
-  const cityVal = watch("address_data.city");
-
-  const validationRules = {
-    first_name: { pattern: /^[A-Za-z]{2,30}$/, message: "First name must be 2-30 letters" },
-    middle_name: { pattern: /^[A-Za-z]{0,30}$/, message: "Middle name must be letters only" },
-    last_name: { pattern: /^[A-Za-z]{2,30}$/, message: "Last name must be 2-30 letters" },
-    email: { pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "Invalid email format" },
-    phone_no: { pattern: /^[6-9][0-9]{9}$/, message: "Phone number must be 10 digits starting with 6-9" },
-    adhaar_no: { pattern: /^[2-9][0-9]{11}$/, message: "Aadhaar must be 12 digits starting with 2-9" },
-    pan_no: { pattern: /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/, message: "Invalid PAN format" },
-    qualification: { pattern: /^[A-Za-z0-9\s\-,.]{2,50}$/, message: "Invalid qualification" },
-    account_no: { pattern: /^[0-9]{9,18}$/, message: "Account number must be 9-18 digits" },
-    ifsc_code: { pattern: /^[A-Z]{4}0[A-Z0-9]{6}$/, message: "Invalid IFSC code" },
-    holder_name: { pattern: /^[A-Za-z ]{2,50}$/, message: "Holder name must be letters only" },
-    house_no: { pattern: /^[A-Za-z0-9\-\/ ]{1,10}$/, message: "Invalid house number" },
-    habitation: { pattern: /^[A-Za-z0-9 ]{1,50}$/, message: "Invalid habitation" },
-    ward_no: { pattern: /^[0-9]{1,5}$/, message: "Invalid ward number" },
-    zone_no: { pattern: /^[0-9]{1,5}$/, message: "Invalid zone number" },
-    block: { pattern: /^[A-Za-z0-9 ]{0,50}$/, message: "Invalid block" },
-    district: { pattern: /^[A-Za-z ]{1,50}$/, message: "Invalid district" },
-    division: { pattern: /^[A-Za-z ]{0,50}$/, message: "Invalid division" },
-    area_code: { pattern: /^[0-9]{3,10}$/, message: "Invalid area code" },
-    address_line: { pattern: /^[A-Za-z0-9,.\-\/ ]{0,100}$/, message: "Invalid address line" },
-  };
-
-  const handleInputChange = async (fieldName) => {
-    await trigger(fieldName);
-  };
-
-  useEffect(() => {
-    const fetchAll = async () => {
-      try {
-        const [c, s, ci] = await Promise.all([fetchCountry(), fetchState(), fetchCity()]);
-        setCountries(c);
-        setStates(s);
-        setCities(ci);
-
-        const data = type === "teacher" ? await fetchTeachers(id) : await fetchOfficeStaff(id);
-
-        // Prefill top-level fields
-        setValue("first_name", data.first_name || "");
-        setValue("middle_name", data.middle_name || "");
-        setValue("last_name", data.last_name || "");
-        setValue("email", data.email || "");
-        setValue("phone_no", data.phone_no || "");
-        setValue("gender", data.gender || "");
-        setValue("adhaar_no", data.adhaar_no || "");
-        setValue("pan_no", data.pan_no || "");
-        setValue("qualification", data.qualification || "");
-        setValue("joining_date", data.joining_date || "");
-
-        setValue("banking_data.account_no", data.banking_data?.account_no || "");
-        setValue("banking_data.ifsc_code", data.banking_data?.ifsc_code || "");
-        setValue("banking_data.holder_name", data.banking_data?.holder_name || "");
-
-        setValue("address_data.house_no", data.address_data?.house_no || "");
-        setValue("address_data.habitation", data.address_data?.habitation || "");
-        setValue("address_data.ward_no", data.address_data?.ward_no || "");
-        setValue("address_data.zone_no", data.address_data?.zone_no || "");
-        setValue("address_data.block", data.address_data?.block || "");
-        setValue("address_data.district", data.address_data?.district || "");
-        setValue("address_data.division", data.address_data?.division || "");
-        setValue("address_data.area_code", data.address_data?.area_code || "");
-        setValue("address_data.address_line", data.address_data?.address_line || "");
-
-        const countryId = c.find(cn => cn.name === data.address_data?.country_name)?.id;
-        const stateId = s.find(st => st.name === data.address_data?.state_name)?.id;
-        const cityId = ci.find(ct => ct.name === data.address_data?.city_name)?.id;
-
-        setValue("address_data.country", countryId || "");
-        setValue("address_data.state", stateId || "");
-        setValue("address_data.city", cityId || "");
-
-      } catch (err) {
-        setError(err.message || "Failed to fetch staff details");
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchAll();
-  }, [id, type, setValue]);
-
-  const onSubmit = async (formData) => {
-    try {
-      setSubmitting(true);
-      const payload = new FormData();
-      const mapNested = (prefix, data) => {
-        Object.entries(data).forEach(([k, v]) => {
-          if (v !== null && v !== undefined) {
-            payload.append(`${prefix}.${k}`, v.toString());
-          }
-        });
-      };
-
-      Object.entries(formData).forEach(([key, value]) => {
-        if (typeof value !== "object" && value !== null && value !== undefined) {
-          payload.append(key, value.toString());
-        }
-      });
-
-      if (formData.user_profile && formData.user_profile[0]) {
-        payload.append("user_profile", formData.user_profile[0]);
-      }
-
-      if (formData.banking_data) {
-        mapNested("banking_detail_input", formData.banking_data);
-      }
-
-      if (formData.address_data) {
-        mapNested("address_input", formData.address_data);
-      }
-
-      if (type === "teacher") {
-        await editTeachersdetails(id, payload);
-      } else {
-        await editOfficeStaffdetails(id, payload);
-      }
-
-      setUpdateModal(true);
-      setFormErrors([]);
-    }
-    catch (err) {
-      console.error("Update error:", err);
-
-      let backendErrors = [];
-
-      // Use err.response.data if available, otherwise err itself
-      const data = (err?.response?.data) ? err.response.data : err;
-
-      const parseErrors = (obj) => {
-        let result = [];
-        if (!obj) return result;
-
-        if (typeof obj === "string") {
-          result.push(obj);
-        } else if (Array.isArray(obj)) {
-          obj.forEach(msg => result.push(msg));
-        } else if (typeof obj === "object") {
-          Object.values(obj).forEach(val => {
-            result = result.concat(parseErrors(val));
-          });
-        }
-        return result;
-      };
-
-      backendErrors = parseErrors(data);
-
-      // Fallback
-      if (backendErrors.length === 0) {
-        backendErrors.push("An unexpected error occurred. Please try again.");
-      }
-      console.log("Final backend errors to display:", backendErrors);
-      setFormErrors(backendErrors);
-    } finally {
-      setSubmitting(false);
-    }
-
-
-
-
-
-  };
-
-  if (loading) return <div className="flex flex-col items-center justify-center min-h-screen">
+const PageLoader = () => (
+  <div className="flex flex-col items-center justify-center min-h-screen">
     <div className="flex space-x-2">
       <div className="w-3 h-3 bgTheme rounded-full animate-bounce"></div>
       <div className="w-3 h-3 bgTheme rounded-full animate-bounce [animation-delay:-0.2s]"></div>
@@ -212,528 +193,524 @@ const UpdateStaffDetails = () => {
     </div>
     <p className="mt-2 text-gray-500 text-sm">Loading data...</p>
   </div>
-  if (error) return <div className="text-center text-red-500 mt-10"><p>{error}</p></div>;
+);
 
-  const maxDate = new Date().toISOString().split("T")[0];
+/* -------------------------------------------------------------------------- */
+/* Main component                                                             */
+/* -------------------------------------------------------------------------- */
+
+const UpdateStaffDetails = () => {
+  const { id, type } = useParams();
+  const navigate = useNavigate();
+  const isTeacher = type?.toLowerCase() === "teacher";
+
+  const [countries, setCountries] = useState([]);
+  const [states, setStates] = useState([]);
+  const [cities, setCities] = useState([]);
+  const [subjects, setSubjects] = useState([]);
+  const [subjectsError, setSubjectsError] = useState(false);
+
+  const [existingPhoto, setExistingPhoto] = useState(null);
+  const [fullName, setFullName] = useState("");
+
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [updateModal, setUpdateModal] = useState(false);
+  const [formErrors, setFormErrors] = useState([]);
+  const [photoError, setPhotoError] = useState(null);
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    setValue,
+    watch,
+    formState: { errors, isDirty },
+  } = useForm({ mode: "onChange", reValidateMode: "onChange" });
+
+  const selectedCadre = watch("cadre");
+  const countryVal = watch("address_data.country");
+  const stateVal = watch("address_data.state");
+  const photoFile = watch("user_profile")?.[0];
+
+  /* ------------------------------- Data load ------------------------------- */
+
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      setLoadError(null);
+
+      const [c, s, ci, subj] = await Promise.all([
+        fetchCountry(),
+        fetchState(),
+        fetchCity(),
+        isTeacher
+          ? fetchSubjects().catch(() => {
+              setSubjectsError(true);
+              return [];
+            })
+          : Promise.resolve([]),
+      ]);
+      const countryList = normalizeList(c);
+      const stateList = normalizeList(s);
+      const cityList = normalizeList(ci);
+      setCountries(countryList);
+      setStates(stateList);
+      setCities(cityList);
+      setSubjects(normalizeList(subj));
+
+      const data = isTeacher ? await fetchTeachers(id) : await fetchOfficeStaff(id);
+      const addr = data.address_data || {};
+      const bank = data.banking_data || {};
+
+      const match = (list, idVal, nameVal) =>
+        idVal ?? list.find((x) => x.name === nameVal)?.id ?? "";
+
+      setExistingPhoto(resolveImageUrl(data.user_profile));
+      setFullName([data.first_name, data.middle_name, data.last_name].filter(Boolean).join(" "));
+
+      reset({
+        first_name: data.first_name || "",
+        middle_name: data.middle_name || "",
+        last_name: data.last_name || "",
+        email: data.email || "",
+        phone_no: data.phone_no || "",
+        gender: data.gender || "",
+        adhaar_no: data.adhaar_no || "",
+        pan_no: data.pan_no || "",
+        qualification: data.qualification || "",
+        joining_date: data.joining_date || "",
+        cadre: data.cadre || "",
+        subject: subjectId(data.subject) ?? "",
+        banking_data: {
+          account_no: bank.account_no || "",
+          ifsc_code: bank.ifsc_code || "",
+          holder_name: bank.holder_name || "",
+        },
+        address_data: {
+          house_no: addr.house_no || "",
+          habitation: addr.habitation || "",
+          ward_no: addr.ward_no || "",
+          zone_no: addr.zone_no || "",
+          block: addr.block || "",
+          district: addr.district || "",
+          division: addr.division || "",
+          area_code: addr.area_code || "",
+          address_line: addr.address_line || "",
+          country: match(countryList, refId(addr.country), addr.country_name),
+          state: match(stateList, refId(addr.state), addr.state_name),
+          city: match(cityList, refId(addr.city), addr.city_name),
+        },
+      });
+    } catch (err) {
+      setLoadError(err?.response?.data?.detail || err?.message || "Failed to fetch staff details");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, type]);
+
+  /* ------------------------------ Derived data ----------------------------- */
+
+  const photoPreview = useMemo(
+    () => (photoFile ? URL.createObjectURL(photoFile) : null),
+    [photoFile]
+  );
+  useEffect(() => () => photoPreview && URL.revokeObjectURL(photoPreview), [photoPreview]);
+
+  const stateOptions = useMemo(
+    () => filterByParent(states, "country", countryVal).sort(byName).map((s) => ({ value: s.id, label: s.name })),
+    [states, countryVal]
+  );
+  const cityOptions = useMemo(
+    () => filterByParent(cities, "state", stateVal).sort(byName).map((c) => ({ value: c.id, label: c.name })),
+    [cities, stateVal]
+  );
+  const countryOptions = useMemo(
+    () => [...countries].sort(byName).map((c) => ({ value: c.id, label: c.name })),
+    [countries]
+  );
+  const subjectOptions = useMemo(
+    () => subjects.map((s) => ({ value: s.id, label: subjectLabel(s) })),
+    [subjects]
+  );
+
+  const initials = (fullName.match(/\b\w/g) || []).slice(0, 2).join("").toUpperCase() || "?";
+  const hasChanges = isDirty || !!photoFile;
+
+  /* -------------------------------- Handlers ------------------------------- */
+
+  const handlePhotoChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      setPhotoError(null);
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setPhotoError("Please choose an image file.");
+      e.target.value = "";
+      return;
+    }
+    if (file.size > MAX_IMAGE_MB * 1024 * 1024) {
+      setPhotoError(`Image must be smaller than ${MAX_IMAGE_MB} MB.`);
+      e.target.value = "";
+      return;
+    }
+    setPhotoError(null);
+  };
+
+  const photoReg = register("user_profile");
+
+  // Reset dependent dropdowns, but only when the API tells us how they relate
+  const onCountryChange = () => {
+    if (supportsParent(states, "country")) {
+      setValue("address_data.state", "");
+      setValue("address_data.city", "");
+    }
+  };
+  const onStateChange = () => {
+    if (supportsParent(cities, "state")) setValue("address_data.city", "");
+  };
+
+  const handleCancel = () => {
+    if (hasChanges && !window.confirm("Discard your unsaved changes?")) return;
+    navigate(-1);
+  };
+
+  const onSubmit = async (formData) => {
+    try {
+      setSubmitting(true);
+      setFormErrors([]);
+
+      const payload = new FormData();
+
+      Object.entries(formData).forEach(([key, value]) => {
+        if (typeof value !== "object" && value !== null && value !== undefined) {
+          if (!isTeacher && (key === "cadre" || key === "subject")) return;
+          payload.append(key, value.toString());
+        }
+      });
+
+      if (formData.user_profile?.[0]) payload.append("user_profile", formData.user_profile[0]);
+
+      const appendNested = (prefix, obj) =>
+        Object.entries(obj || {}).forEach(([k, v]) => {
+          if (v !== null && v !== undefined) payload.append(`${prefix}.${k}`, v.toString());
+        });
+      appendNested("banking_detail_input", formData.banking_data);
+      appendNested("address_input", formData.address_data);
+
+      if (isTeacher) await editTeachersdetails(id, payload);
+      else await editOfficeStaffdetails(id, payload);
+
+      setUpdateModal(true);
+    } catch (err) {
+      const messages = collectErrors(err?.response?.data ?? err).filter(Boolean);
+      setFormErrors(messages.length ? messages : ["An unexpected error occurred. Please try again."]);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  /* --------------------------------- Render -------------------------------- */
+
+  if (loading) return <PageLoader />;
+
+  if (loadError) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-6">
+        <p className="text-lg font-medium text-red-500">{loadError}</p>
+        <div className="flex gap-3 mt-5">
+          <button onClick={() => navigate(-1)} className="btn btn-ghost">
+            Go back
+          </button>
+          <button onClick={loadData} className="btn bgTheme text-white">
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const common = { register, errors };
 
   return (
-    <div className="mb-24 md:mb-10">
-      <div className="p-6 bg-gray-100 dark:bg-gray-900 min-h-screen">
-        <div className="max-w-7xl mx-auto bg-white dark:bg-gray-800 p-8 rounded-lg shadow dark:shadow-gray-700">
-          <h1 className="text-3xl font-bold mb-8 text-center text-gray-800 dark:text-gray-100">
-            {type?.toLowerCase() === "teacher" ? "Update Teacher Details" : "Update Staff Details"}
-          </h1>
-
-          <form onSubmit={handleSubmit(onSubmit)} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" encType="multipart/form-data">
-
-            {/* Top-level Fields */}
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">First Name</label>
-                <span className="text-error">*</span>
+    <div className="mb-24 md:mb-10 bg-gray-100 dark:bg-gray-900 min-h-screen">
+      <div className="max-w-6xl mx-auto p-4 sm:p-6">
+        <form onSubmit={handleSubmit(onSubmit)} noValidate className="space-y-6">
+          {/* Header */}
+          <div className="rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-sm p-5 flex flex-col sm:flex-row items-center gap-5">
+            <div className="relative group">
+              <div className="h-24 w-24 rounded-full overflow-hidden flex items-center justify-center bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-700 dark:to-gray-600 ring-4 ring-white dark:ring-gray-800 shadow-md">
+                {photoPreview || existingPhoto ? (
+                  <img src={photoPreview || existingPhoto} alt="Profile" className="h-full w-full object-cover" />
+                ) : (
+                  <span className="text-2xl font-bold text-gray-500 dark:text-gray-300">{initials}</span>
+                )}
               </div>
-              <input
-                type="text"
-                {...register("first_name", {
-                  required: "First Name is required",
-                  pattern: {
-                    value: validationRules.first_name.pattern,
-                    message: validationRules.first_name.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.first_name && <span className="text-error text-sm mt-1">{errors.first_name.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <label className="label text-gray-700 dark:text-gray-300">Middle Name</label>
-              <input
-                type="text"
-                {...register("middle_name", {
-                  pattern: {
-                    value: validationRules.middle_name.pattern,
-                    message: validationRules.middle_name.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.middle_name && <span className="text-error text-sm mt-1">{errors.middle_name.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">Last Name</label>
-                <span className="text-error">*</span>
-              </div>
-              <input
-                type="text"
-                {...register("last_name", {
-                  required: "Last Name is required",
-                  pattern: {
-                    value: validationRules.last_name.pattern,
-                    message: validationRules.last_name.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.last_name && <span className="text-error text-sm mt-1">{errors.last_name.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">Email</label>
-                <span className="text-error">*</span>
-              </div>
-              <input
-                type="email"
-                {...register("email", {
-                  required: "Email is required",
-                  pattern: {
-                    value: validationRules.email.pattern,
-                    message: validationRules.email.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.email && <span className="text-error text-sm mt-1">{errors.email.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">Phone No</label>
-                <span className="text-error">*</span>
-              </div>
-              <input
-                type="text"
-                {...register("phone_no", {
-                  required: "Phone No is required",
-                  pattern: {
-                    value: validationRules.phone_no.pattern,
-                    message: validationRules.phone_no.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.phone_no && <span className="text-error text-sm mt-1">{errors.phone_no.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">Gender</label>
-                <span className="text-error">*</span>
-              </div>
-              <select
-                {...register("gender", { required: "Gender is required" })}
-                className="input input-bordered w-full"
+              <label
+                htmlFor="user_profile"
+                className="absolute inset-0 rounded-full flex items-center justify-center bg-black/40 text-white text-xs opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition cursor-pointer"
               >
-                <option value="">Select Gender</option>
-                <option value="Male">Female</option>
-                <option value="Female">Male</option>
-              </select>
-              {errors.gender && <span className="text-error text-sm mt-1">{errors.gender.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">Aadhaar No</label>
-                <span className="text-error">*</span>
-              </div>
+                Change
+              </label>
               <input
-                type="text"
-                {...register("adhaar_no", {
-                  required: "Aadhaar No is required",
-                  pattern: {
-                    value: validationRules.adhaar_no.pattern,
-                    message: validationRules.adhaar_no.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.adhaar_no && <span className="text-error text-sm mt-1">{errors.adhaar_no.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">PAN No</label>
-                <span className="text-error">*</span>
-              </div>
-              <input
-                type="text"
-                {...register("pan_no", {
-                  required: "PAN No is required",
-                  pattern: {
-                    value: validationRules.pan_no.pattern,
-                    message: validationRules.pan_no.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.pan_no && <span className="text-error text-sm mt-1">{errors.pan_no.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">Qualification</label>
-                <span className="text-error">*</span>
-              </div>
-              <input
-                type="text"
-                {...register("qualification", {
-                  required: "Qualification is required",
-                  pattern: {
-                    value: validationRules.qualification.pattern,
-                    message: validationRules.qualification.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.qualification && <span className="text-error text-sm mt-1">{errors.qualification.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">Joining Date</label>
-              </div>
-              <input
-                type="date"
-                {...register("joining_date")}
-                className="input input-bordered w-full cursor-not-allowed bg-gray-100 dark:bg-gray-700"
-                readOnly
-              />
-            </div>
-            {/* Banking Fields */}
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">Account No</label>
-                <span className="text-error">*</span>
-              </div>
-              <input
-                type="text"
-                {...register("banking_data.account_no", {
-                  required: "Account No is required",
-                  pattern: {
-                    value: validationRules.account_no.pattern,
-                    message: validationRules.account_no.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.banking_data?.account_no && <span className="text-error text-sm mt-1">{errors.banking_data.account_no.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">IFSC Code</label>
-                <span className="text-error">*</span>
-              </div>
-              <input
-                type="text"
-                {...register("banking_data.ifsc_code", {
-                  required: "IFSC Code is required",
-                  pattern: {
-                    value: validationRules.ifsc_code.pattern,
-                    message: validationRules.ifsc_code.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.banking_data?.ifsc_code && <span className="text-error text-sm mt-1">{errors.banking_data.ifsc_code.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">Holder Name</label>
-                <span className="text-error">*</span>
-              </div>
-              <input
-                type="text"
-                {...register("banking_data.holder_name", {
-                  required: "Holder Name is required",
-                  pattern: {
-                    value: validationRules.holder_name.pattern,
-                    message: validationRules.holder_name.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.banking_data?.holder_name && <span className="text-error text-sm mt-1">{errors.banking_data.holder_name.message}</span>}
-            </div>
-
-            {/* Address Fields */}
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">House No</label>
-              </div>
-              <input
-                type="text"
-                {...register("address_data.house_no", {
-                  pattern: {
-                    value: validationRules.house_no.pattern,
-                    message: validationRules.house_no.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.address_data?.house_no && <span className="text-error text-sm mt-1">{errors.address_data.house_no.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">Habitation</label>
-              </div>
-              <input
-                type="text"
-                {...register("address_data.habitation", {
-                  pattern: {
-                    value: validationRules.habitation.pattern,
-                    message: validationRules.habitation.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.address_data?.habitation && <span className="text-error text-sm mt-1">{errors.address_data.habitation.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <label className="label text-gray-700 dark:text-gray-300">Ward No</label>
-              <input
-                type="text"
-                {...register("address_data.ward_no", {
-                  pattern: {
-                    value: validationRules.ward_no.pattern,
-                    message: validationRules.ward_no.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.address_data?.ward_no && <span className="text-error text-sm mt-1">{errors.address_data.ward_no.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <label className="label text-gray-700 dark:text-gray-300">Zone No</label>
-              <input
-                type="text"
-                {...register("address_data.zone_no", {
-                  pattern: {
-                    value: validationRules.zone_no.pattern,
-                    message: validationRules.zone_no.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.address_data?.zone_no && <span className="text-error text-sm mt-1">{errors.address_data.zone_no.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <label className="label text-gray-700 dark:text-gray-300">Block</label>
-              <input
-                type="text"
-                {...register("address_data.block", {
-                  pattern: {
-                    value: validationRules.block.pattern,
-                    message: validationRules.block.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.address_data?.block && <span className="text-error text-sm mt-1">{errors.address_data.block.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <label className="label text-gray-700 dark:text-gray-300">District</label>
-              <input
-                type="text"
-                {...register("address_data.district", {
-                  pattern: {
-                    value: validationRules.district.pattern,
-                    message: validationRules.district.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.address_data?.district && <span className="text-error text-sm mt-1">{errors.address_data.district.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <label className="label text-gray-700 dark:text-gray-300">Division</label>
-              <input
-                type="text"
-                {...register("address_data.division", {
-                  pattern: {
-                    value: validationRules.division.pattern,
-                    message: validationRules.division.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.address_data?.division && <span className="text-error text-sm mt-1">{errors.address_data.division.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">Area Code</label>
-                <span className="text-error">*</span>
-              </div>
-              <input
-                type="text"
-                {...register("address_data.area_code", {
-                  pattern: {
-                    value: validationRules.area_code.pattern,
-                    message: validationRules.area_code.message
-                  }
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.address_data?.area_code && <span className="text-error text-sm mt-1">{errors.address_data.area_code.message}</span>}
-            </div>
-
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">Address Line</label>
-                <span className="text-error">*</span>
-              </div>
-              <input
-                type="text"
-                {...register("address_data.address_line", {
-                  required: "Address Line is required",
-                  pattern: {
-                    value: validationRules.address_line.pattern,
-                    message: validationRules.address_line.message,
-                  },
-                })}
-                className="input input-bordered w-full"
-              />
-              {errors.address_data?.address_line && (
-                <span className="text-error text-sm mt-1">
-                  {errors.address_data.address_line.message}
-                </span>
-              )}
-            </div>
-
-            {/* Country, State, City */}
-            {/* COUNTRY */}
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">Country</label>
-                <span className="text-error">*</span>
-              </div>
-              <select
-                {...register("address_data.country", { required: "Country is required" })}
-                className="select select-bordered w-full bg-white dark:bg-gray-700 dark:text-gray-200 focus:outline-none cursor-pointer capitalize"
-                value={countryVal || ""}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value);
-                  setValue("address_data.country", val, { shouldValidate: true });
-                  trigger("address_data.country");
-                }}
-              >
-                <option value="">Select Country</option>
-                {[...countries]
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-              </select>
-              {errors.address_data?.country && (
-                <span className="text-error text-sm mt-1">{errors.address_data.country.message}</span>
-              )}
-            </div>
-
-            {/* STATE */}
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">State</label>
-                <span className="text-error">*</span>
-              </div>
-              <select
-                {...register("address_data.state", { required: "State is required" })}
-                className="select select-bordered w-full bg-white dark:bg-gray-700 dark:text-gray-200 focus:outline-none cursor-pointer capitalize"
-                value={stateVal || ""}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value);
-                  setValue("address_data.state", val, { shouldValidate: true });
-                  trigger("address_data.state");
-                }}
-              >
-                <option value="">Select State</option>
-                {[...states]
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-              </select>
-              {errors.address_data?.state && (
-                <span className="text-error text-sm mt-1">{errors.address_data.state.message}</span>
-              )}
-            </div>
-
-            {/* CITY */}
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1">
-                <label className="label text-gray-700 dark:text-gray-300">City</label>
-                <span className="text-error">*</span>
-              </div>
-              <select
-                {...register("address_data.city", { required: "City is required" })}
-                className="select select-bordered w-full bg-white dark:bg-gray-700 dark:text-gray-200 focus:outline-none cursor-pointer capitalize"
-                value={cityVal || ""}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value);
-                  setValue("address_data.city", val, { shouldValidate: true });
-                  trigger("address_data.city");
-                }}
-              >
-                <option value="">Select City</option>
-                {[...cities]
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-              </select>
-              {errors.address_data?.city && (
-                <span className="text-error text-sm mt-1">{errors.address_data.city.message}</span>
-              )}
-            </div>
-
-
-            {/* Profile Picture */}
-            <div className="md:col-span-2 lg:col-span-3 flex flex-col">
-              <label className="label text-gray-700 dark:text-gray-300">Profile Picture</label>
-              <input
+                id="user_profile"
                 type="file"
-                {...register("user_profile")}
-                className="file-input file-input-bordered w-full"
+                accept="image/*"
+                className="sr-only"
+                {...photoReg}
+                onChange={(e) => {
+                  handlePhotoChange(e);
+                  photoReg.onChange(e);
+                }}
               />
             </div>
 
-            <div className="col-span-1 md:col-span-2 lg:col-span-3 text-center mt-6">
-              {/* <button type="submit" className="btn bgTheme text-white w-52">Save Changes</button> */}
-              <div className="col-span-1 md:col-span-2 lg:col-span-3 mt-6 flex justify-center">
+            <div className="flex-1 text-center sm:text-left">
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-gray-100">
+                {isTeacher ? "Update Teacher Details" : "Update Staff Details"}
+              </h1>
+              {fullName && <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">{fullName}</p>}
+              <p className="text-xs text-gray-500 mt-1">
+                Hover the photo to change it (JPG or PNG, up to {MAX_IMAGE_MB} MB). Fields marked * are required.
+              </p>
+              {photoError && (
+                <p role="alert" className="text-xs text-red-500 mt-1">
+                  {photoError}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Backend errors */}
+          {formErrors.length > 0 && (
+            <div
+              role="alert"
+              className="rounded-lg border border-red-200 bg-red-50 dark:bg-red-900/30 dark:border-red-800 px-4 py-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-red-700 dark:text-red-200">Update failed</p>
+                  <ul className="mt-1 list-disc list-inside text-sm text-red-700 dark:text-red-200 space-y-0.5">
+                    {formErrors.map((msg, i) => (
+                      <li key={i}>{msg}</li>
+                    ))}
+                  </ul>
+                </div>
                 <button
-                  type="submit"
-                  className="btn bgTheme btn-primary w-52 flex justify-center items-center text-white"
-                  disabled={submitting}
+                  type="button"
+                  onClick={() => setFormErrors([])}
+                  className="text-red-500 hover:text-red-700"
+                  aria-label="Dismiss"
                 >
-                  {submitting ? (
-                    <i className="fa-solid fa-spinner fa-spin mr-2"></i>
-                  ) : (
-                    <></>
-                  )}
-                  {submitting ? "" : "Save Changes"}
+                  ✕
                 </button>
               </div>
-
             </div>
-          </form>
+          )}
 
-        </div>
+          <Section title="Personal information">
+            <TextField {...common} name="first_name" label="First name" required rules={RULES.first_name} />
+            <TextField {...common} name="middle_name" label="Middle name" rules={RULES.middle_name} />
+            <TextField {...common} name="last_name" label="Last name" required rules={RULES.last_name} />
+            <SelectField
+              {...common}
+              name="gender"
+              label="Gender"
+              required
+              placeholder="Select gender"
+              options={[
+                { value: "Male", label: "Male" },
+                { value: "Female", label: "Female" },
+                { value: "Other", label: "Other" },
+              ]}
+            />
+          </Section>
+
+          <Section title="Contact">
+            <TextField {...common} name="email" label="Email" type="email" required rules={RULES.email} />
+            <TextField
+              {...common}
+              name="phone_no"
+              label="Phone number"
+              required
+              inputMode="numeric"
+              transform={digitsOnly(10)}
+              rules={RULES.phone_no}
+              hint="10-digit mobile number"
+            />
+          </Section>
+
+          <Section title="Professional details">
+            {isTeacher && (
+              <>
+                <Field label="Cadre" required error={errors.cadre?.message} full>
+                  <div role="radiogroup" aria-label="Cadre" className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {CADRE_CHOICES.map((c) => (
+                      <label
+                        key={c.value}
+                        className={`cursor-pointer rounded-lg border-2 px-4 py-3 transition ${
+                          selectedCadre === c.value
+                            ? "border-blue-500 bg-blue-50 dark:bg-blue-900/30"
+                            : "border-gray-200 dark:border-gray-600 hover:border-gray-300"
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          value={c.value}
+                          className="sr-only"
+                          {...register("cadre", { required: "Please select a cadre" })}
+                        />
+                        <span className="block text-sm font-semibold text-gray-800 dark:text-gray-100">{c.value}</span>
+                        <span className="block text-xs text-gray-500 dark:text-gray-400">{c.hint}</span>
+                      </label>
+                    ))}
+                  </div>
+                </Field>
+
+                <SelectField
+                  {...common}
+                  name="subject"
+                  label="Subject"
+                  required
+                  placeholder="Select subject"
+                  options={subjectOptions}
+                  disabled={subjectsError}
+                  hint={subjectsError ? "Couldn't load subjects. Reload the page to try again." : undefined}
+                />
+              </>
+            )}
+
+            <TextField {...common} name="qualification" label="Qualification" required rules={RULES.qualification} />
+            <TextField
+              {...common}
+              name="joining_date"
+              label="Joining date"
+              type="date"
+              readOnly
+              hint="Set by the school and can't be edited."
+            />
+          </Section>
+
+          <Section title="Identity documents">
+            <TextField
+              {...common}
+              name="adhaar_no"
+              label="Aadhaar number"
+              required
+              inputMode="numeric"
+              transform={digitsOnly(12)}
+              rules={RULES.adhaar_no}
+              hint="12 digits"
+            />
+            <TextField
+              {...common}
+              name="pan_no"
+              label="PAN number"
+              required
+              transform={upper(10)}
+              rules={RULES.pan_no}
+              hint="e.g. ABCDE1234F"
+            />
+          </Section>
+
+          <Section title="Bank details">
+            <TextField
+              {...common}
+              name="banking_data.account_no"
+              label="Account number"
+              required
+              inputMode="numeric"
+              transform={digitsOnly(18)}
+              rules={RULES.account_no}
+            />
+            <TextField
+              {...common}
+              name="banking_data.ifsc_code"
+              label="IFSC code"
+              required
+              transform={upper(11)}
+              rules={RULES.ifsc_code}
+            />
+            <TextField
+              {...common}
+              name="banking_data.holder_name"
+              label="Account holder name"
+              required
+              rules={RULES.holder_name}
+            />
+          </Section>
+
+          <Section title="Address">
+            <TextField {...common} name="address_data.address_line" label="Address line" required rules={RULES.address_line} full />
+            <TextField {...common} name="address_data.house_no" label="House no" rules={RULES.house_no} />
+            <TextField {...common} name="address_data.habitation" label="Habitation" rules={RULES.habitation} />
+            <TextField {...common} name="address_data.ward_no" label="Ward no" inputMode="numeric" transform={digitsOnly(5)} rules={RULES.ward_no} />
+            <TextField {...common} name="address_data.zone_no" label="Zone no" inputMode="numeric" transform={digitsOnly(5)} rules={RULES.zone_no} />
+            <TextField {...common} name="address_data.block" label="Block" rules={RULES.block} />
+            <TextField {...common} name="address_data.district" label="District" rules={RULES.district} />
+            <TextField {...common} name="address_data.division" label="Division" rules={RULES.division} />
+            <TextField {...common} name="address_data.area_code" label="Area code" inputMode="numeric" transform={digitsOnly(10)} rules={RULES.area_code} />
+
+            <SelectField
+              {...common}
+              name="address_data.country"
+              label="Country"
+              required
+              placeholder="Select country"
+              options={countryOptions}
+              onChange={onCountryChange}
+            />
+            <SelectField
+              {...common}
+              name="address_data.state"
+              label="State"
+              required
+              placeholder="Select state"
+              options={stateOptions}
+              onChange={onStateChange}
+            />
+            <SelectField
+              {...common}
+              name="address_data.city"
+              label="City"
+              required
+              placeholder="Select city"
+              options={cityOptions}
+            />
+          </Section>
+
+          {/* Sticky action bar */}
+          <div className="-mx-4 sm:mx-0 border-t sm:border sm:rounded-xl border-gray-200 dark:border-gray-700 bg-white/95 dark:bg-gray-800/95 backdrop-blur shadow-lg">
+            <div className="px-4 sm:px-5 py-3 flex flex-wrap items-center justify-end gap-3">
+              <div className="flex gap-3">
+                <button type="button" onClick={handleCancel} disabled={submitting} className="btn btn-ghost">
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting || !hasChanges}
+                  className="btn bgTheme text-white min-w-[9rem]"
+                >
+                  {submitting ? (
+                    <>
+                      <span className="loading loading-spinner loading-sm" /> Saving…
+                    </>
+                  ) : (
+                    "Save changes"
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </form>
       </div>
 
       {updateModal && (
@@ -742,31 +719,6 @@ const UpdateStaffDetails = () => {
           handleCloseAndNavigate={() => navigate(`/staffDetail/${type}/${id}`)}
         />
       )}
-
-      {/* Error Modal */}
-      {formErrors.length > 0 && (
-        <dialog className="modal modal-open">
-          <div className="modal-box bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100">
-            <h3 className="font-bold text-lg">Update Failed</h3>
-            <div className="py-4">
-              {formErrors.map((err, idx) => (
-                <p key={idx} className="text-sm">
-                  {err}
-                </p>
-              ))}
-            </div>
-            <div className="modal-action">
-              <button
-                className="btn bgTheme text-white w-30"
-                onClick={() => setFormErrors([])}
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </dialog>
-      )}
-
     </div>
   );
 };

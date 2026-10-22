@@ -669,7 +669,6 @@ export const fetchyearLevelData = async (classId) => {
     );
     return response.data;
   } catch (err) {
-    console.log("Failed to load year level data. Please try again." + err);
     throw err;
   }
 };
@@ -679,7 +678,6 @@ export const fetchYearLevels = async () => {
     const response = await axios.get(`${constants.baseUrl}/d/year-levels/`);
     return response.data;
   } catch (err) {
-    console.error("Failed to fetch year levels:", err);
     throw err;
   }
 };
@@ -696,7 +694,6 @@ export const fetchEmployee = async (accessToken, role) => {
     );
     return response.data;
   } catch (err) {
-    console.error("Failed to fetch Employee:", err);
     throw err;
   }
 };
@@ -717,7 +714,6 @@ export const fetchSchoolExpense = async (
     );
     return response.data;
   } catch (err) {
-    console.error("Failed to fetch Employee:", err);
     throw err;
   }
 };
@@ -868,16 +864,20 @@ export const fetchGuardianAttendanceData = async (date = "", guardianId) => {
   }
 };
 
-export const fetchTeacherAttendanceData = async (date = "", className) => {
+// month/year are optional: if omitted (school years not readable), the server uses its default period
+export const fetchTeacherAttendanceData = async (className, month, year) => {
   try {
-    const response = await axios.get(
-      `${BASE_URL}/a/teacher-dashboard/?class_name=${className}&date=${date}`,
-    );
+    const query = [`class_name=${encodeURIComponent(className)}`]; // "KG 1" -> KG%201
+    if (month) query.push(`month=${month}`);
+    if (year) query.push(`year=${year}`);
 
+    const response = await axios.get(
+      `${BASE_URL}/a/teacher-dashboard/?${query.join("&")}`
+    );
     return response.data;
   } catch (error) {
-    console.error("Failed to fetch attendance data:", error);
-    return null;
+    console.error("Failed to fetch teacher attendance data:", error);
+    return null; // null = request failed, [] = no students/records
   }
 };
 
@@ -1837,3 +1837,137 @@ export const fetchTransferCertificates = async (page = 1, pageSize = 10) => {
     throw err;
   }
 };
+
+
+// Subject allocation matrix for a class
+export const fetchSubjectMatrix = async (yearLevelId, schoolYear = "") => {
+  try {
+    const params = { year_level_id: yearLevelId };
+    if (schoolYear) params.school_year = schoolYear;
+
+    const response = await axios.get(`${BASE_URL}/t/subject-matrix/`, {
+      params,
+    });
+    return response.data;
+  } catch (err) {
+    console.error("Failed to fetch subject matrix:", err);
+    throw err;
+  }
+};
+
+// Class timetable (Mon-Sat) for a year level on a given date
+export const fetchClassTimetable = async (yearLevelId, date = "") => {
+  try {
+    const params = { year_level_id: yearLevelId };
+    if (date) params.date = date; // YYYY-MM-DD, backend defaults to today
+    const response = await axios.get(`${BASE_URL}/t/class-timetable/`, { params });
+    return response.data;
+  } catch (err) {
+    console.error("Failed to fetch class timetable:", err);
+    throw err;
+  }
+};
+
+// Teacher dropdown: [{ id, name, cadre, subject_name, display_name }]
+export const fetchDropdownTeachers = async () => {
+  try {
+    const response = await axios.get(`${BASE_URL}/t/dropdown-teachers/`);
+    return response.data;
+  } catch (err) {
+    console.error("Failed to fetch dropdown teachers:", err);
+    throw err;
+  }
+};
+
+// Teacher workload for the week of `date`
+export const fetchTeacherTimetable = async (teacherId, date = "") => {
+  try {
+    const params = { teacher_id: teacherId };
+    if (date) params.date = date; // YYYY-MM-DD
+    const response = await axios.get(`${BASE_URL}/t/teacher-workload/`, { params });
+    return response.data;
+  } catch (err) {
+    console.error("Failed to fetch teacher workload:", err);
+    throw err;
+  }
+};
+
+// Mark one teacher: status "A" | "L" | "P" (same endpoint/shape as saveTeacherAttendance)
+export const toggleTeacherAbsence = async (teacherId, status, date) => {
+  try {
+    const payload = { marked_at: date, P: [], A: [], L: [] };
+    payload[status].push(teacherId);
+    const response = await axios.post(`${BASE_URL}/a/teacher-attendance/`, payload);
+    return response.data;
+  } catch (err) {
+    console.error("Failed to mark teacher attendance:", err.response?.data || err);
+    throw err;
+  }
+};
+
+// Free teachers for a slot
+export const fetchAvailableSubstitutes = async ({ date, day, periodIndex, absentTeacherId }) => {
+  try {
+    const response = await axios.get(`${BASE_URL}/t/available-substitutes/`, {
+      params: {
+        date_value: date,
+        day_of_week: day,
+        period_index: periodIndex,
+        absent_teacher_id: absentTeacherId,
+      },
+    });
+    return response.data; // { count, available_teachers: [...] }
+  } catch (err) {
+    console.error("Failed to fetch available substitutes:", err);
+    throw err;
+  }
+};
+
+// Remove an arrangement
+export const removeSubstitute = async (payload) => {
+  try {
+    const response = await axios.post(`${BASE_URL}/t/remove-substitute/`, payload);
+    return response.data;
+  } catch (err) {
+    console.error("Failed to remove substitute:", err);
+    throw err;
+  }
+};
+
+
+// Create / update a timetable slot (subject + teacher for a class, day and period)
+export const saveTimetableSlot = async (payload) => {
+  try {
+    const response = await axios.post(`${BASE_URL}/t/save-timetable-slot/`, payload);
+    return response.data;
+  } catch (err) {
+    console.error("Failed to save timetable slot:", err.response?.data || err);
+    throw err;
+  }
+};
+
+// Clear a timetable slot
+export const clearTimetableSlot = async (payload) => {
+  try {
+    const response = await axios.post(`${BASE_URL}/t/clear-timetable-slot/`, payload);
+    return response.data;
+  } catch (err) {
+    console.error("Failed to clear timetable slot:", err.response?.data || err);
+    throw err;
+  }
+};
+
+
+// Subjects available for a class: GET /d/subject/?year_level=<id>
+export const fetchSubjectsByYearLevel = async (yearLevelId) => {
+  try {
+    const response = await axios.get(`${BASE_URL}/d/subject/`, {
+      params: { year_level: yearLevelId },
+    });
+    return response.data;
+  } catch (err) {
+    console.error("Failed to fetch subjects for class:", err);
+    throw err;
+  }
+};
+

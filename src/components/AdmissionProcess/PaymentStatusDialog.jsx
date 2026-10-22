@@ -16,7 +16,7 @@ const PaymentStatusDialog = ({ paymentStatus, onClose }) => {
               <img src={img} alt="logo" className="w-16 h-16 object-contain" />
               <div className="flex flex-col items-end">
                 <h2 className="text-xl font-bold uppercase leading-tight text-center text-black">
-                  New Progressive Education Public School
+                  LGS
                 </h2>
                 <div className="mt-2 text-sm text-gray-700 text-center w-full">
                   <p className="leading-tight font-bold text-black">Bhopal - 462 001</p>

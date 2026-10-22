@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { allRouterLink } from "../../router/AllRouterLinks";
 
 import {
@@ -13,7 +13,14 @@ import {
 } from "../../services/api/Api";
 
 const TeacherAttendance = () => {
-  const [activeTab, setActiveTab] = useState("teachers");
+  // Active tab is kept in the URL (?tab=teachers | ?tab=staff)
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get("tab") === "staff" ? "staff" : "teachers";
+
+  const setActiveTab = (tab) => {
+    setSearchParams({ tab }, { replace: true });
+  };
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [showAlert, setShowAlert] = useState(false);
@@ -367,32 +374,44 @@ const TeacherAttendance = () => {
     );
   }
 
+  // Shared class strings so both tabs stay identical
+  const tableClass =
+    "min-w-[860px] w-full divide-y divide-gray-300 dark:divide-gray-700 text-xs sm:text-sm";
+  const thClass = "px-4 py-3 text-center text-nowrap text-sm font-semibold";
+  const dateInputClass =
+    "border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 p-1 rounded text-center w-full";
+  const selectBaseClass =
+    "select select-bordered w-full min-w-[170px] focus:outline-none text-nowrap border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200";
+
+  // Record page link — carries the currently active tab
+  const recordLink = `${allRouterLink.teacherAttendanceRecord}?tab=${activeTab}`;
+
   // ------------ UI WITH TABS ----------
   return (
-    <div className="min-h-screen p-5 bg-gray-50 dark:bg-gray-900 mb-24 md:mb-10">
-      <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg mb-10">
+    <div className="min-h-screen p-3 sm:p-5 bg-gray-50 dark:bg-gray-900 mb-24 md:mb-10">
+      <div className="bg-white dark:bg-gray-800 p-4 sm:p-6 rounded-lg shadow-lg mb-10">
         {/* Tabs */}
-        <div className="flex gap-4">
+        <div className="flex gap-2 sm:gap-4 overflow-x-auto no-scrollbar">
           <button
             onClick={() => setActiveTab("teachers")}
-            className={`px-6 py-2 font-semibold rounded-t-lg border-b-2 ${
+            className={`px-4 sm:px-6 py-2 font-semibold rounded-t-lg border-b-2 whitespace-nowrap ${
               activeTab === "teachers"
                 ? "border-[#5E35B1] textTheme"
                 : "border-transparent text-gray-600 hover:text-[#5E35B1] dark:text-gray-300 dark:hover:text-[#9575cd]"
             }`}
           >
-            <i className="fa-solid fa-person-chalkboard mr-2 text-3xl"></i>
+            <i className="fa-solid fa-person-chalkboard mr-2 text-2xl sm:text-3xl"></i>
             Teachers
           </button>
           <button
             onClick={() => setActiveTab("staff")}
-            className={`px-6 py-2 font-semibold rounded-t-lg border-b-2 ${
+            className={`px-4 sm:px-6 py-2 font-semibold rounded-t-lg border-b-2 whitespace-nowrap ${
               activeTab === "staff"
                 ? "border-[#5E35B1] textTheme"
                 : "border-transparent text-gray-600 hover:text-[#5E35B1] dark:text-gray-300 dark:hover:text-[#9575cd]"
             }`}
           >
-            <i className="fa-solid fa-clipboard-user mr-2 text-3xl"></i>
+            <i className="fa-solid fa-clipboard-user mr-2 text-2xl sm:text-3xl"></i>
             Office Staff
           </button>
         </div>
@@ -400,13 +419,13 @@ const TeacherAttendance = () => {
         {/* -------- TEACHER ATTENDANCE TAB -------- */}
         {activeTab === "teachers" && (
           <>
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-800 dark:text-white text-center mb-4">
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-800 dark:text-white text-center mt-6 mb-4">
               <i className="fa-solid fa-person-chalkboard mr-2 text-3xl"></i>
               Teacher Attendance
             </h1>
 
             {/* Top Bar */}
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-end gap-4 mb-6 border-b border-gray-200 dark:border-gray-700 pb-2">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3 sm:gap-4 mb-6 border-b border-gray-200 dark:border-gray-700 pb-3">
               <input
                 type="text"
                 placeholder="Search by name..."
@@ -416,10 +435,7 @@ const TeacherAttendance = () => {
                 }
                 className="border px-3 py-2 rounded w-full sm:w-64 dark:bg-gray-700 dark:text-white dark:border-gray-600"
               />
-              <Link
-                to={allRouterLink.teacherAttendanceRecord}
-                className="btn bgTheme text-white"
-              >
+              <Link to={recordLink} className="btn bgTheme text-white">
                 <i className="fa-solid fa-clipboard-list w-5"></i> Attendance
                 Record
               </Link>
@@ -427,27 +443,15 @@ const TeacherAttendance = () => {
 
             {/* Table */}
             <div className="w-full overflow-x-auto no-scrollbar max-h-[70vh] rounded-lg mb-10">
-              <table className="min-w-full divide-y divide-gray-300 dark:divide-gray-700 text-xs sm:text-sm">
+              <table className={tableClass}>
                 <thead className="bgTheme text-white z-2 sticky top-0">
                   <tr>
-                    <th className="px-4 py-3 text-center text-nowrap text-sm font-semibold">
-                      S.NO
-                    </th>
-                    <th className="px-4 py-3 text-center text-nowrap text-sm font-semibold">
-                      Teacher Name
-                    </th>
-                    <th className="px-4 py-3 text-center text-nowrap text-sm font-semibold">
-                      Email
-                    </th>
-                    <th className="px-4 py-3 text-center text-nowrap text-sm font-semibold">
-                      Date
-                    </th>
-                    <th className="px-4 py-3 text-center text-nowrap text-sm font-semibold">
-                      Status
-                    </th>
-                    <th className="px-4 py-3 text-center text-nowrap text-sm font-semibold">
-                      Action
-                    </th>
+                    <th className={thClass}>S.NO</th>
+                    <th className={thClass}>Teacher Name</th>
+                    <th className={thClass}>Email</th>
+                    <th className={thClass}>Date</th>
+                    <th className={thClass}>Status</th>
+                    <th className={thClass}>Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
@@ -467,7 +471,9 @@ const TeacherAttendance = () => {
                         <td className="px-4 py-3 text-nowrap text-gray-700 dark:text-gray-300">
                           {teacher.email}
                         </td>
-                        <td className="px-4 py-3">
+
+                        {/* Date */}
+                        <td className="px-4 py-3 min-w-[170px]">
                           <input
                             type="date"
                             disabled={teacherAttendance[teacher.id]?.marked}
@@ -480,10 +486,12 @@ const TeacherAttendance = () => {
                               )
                             }
                             max={new Date().toISOString().split("T")[0]}
-                            className="border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 p-1 rounded text-center"
+                            className={dateInputClass}
                           />
                         </td>
-                        <td className="px-4 py-3">
+
+                        {/* Status */}
+                        <td className="px-4 py-3 min-w-[190px]">
                           <select
                             value={teacherAttendance[teacher.id]?.status || ""}
                             onChange={(e) =>
@@ -494,7 +502,7 @@ const TeacherAttendance = () => {
                               )
                             }
                             disabled={teacherAttendance[teacher.id]?.marked}
-                            className={`select select-bordered w-full focus:outline-none text-nowrap border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 ${
+                            className={`${selectBaseClass} ${
                               teacherAttendance[teacher.id]?.marked
                                 ? "bg-gray-300 cursor-not-allowed"
                                 : ""
@@ -507,14 +515,15 @@ const TeacherAttendance = () => {
                           </select>
                         </td>
 
-                        <td className="px-4 py-3">
+                        {/* Action */}
+                        <td className="px-4 py-3 min-w-[130px]">
                           <button
                             onClick={() => handleTeacherSave(teacher)}
                             disabled={
                               teacherAttendance[teacher.id]?.marked ||
                               savingTeacher[teacher.id]
                             }
-                            className={`btn w-28 ${
+                            className={`btn w-28 shrink-0 ${
                               teacherAttendance[teacher.id]?.marked
                                 ? "bg-gray-400 textTheme cursor-not-allowed"
                                 : "bgTheme text-white"
@@ -535,7 +544,7 @@ const TeacherAttendance = () => {
                   ) : (
                     <tr>
                       <td
-                        colSpan="7"
+                        colSpan="6"
                         className="px-4 py-6 text-center text-gray-500 dark:text-gray-400"
                       >
                         No teachers found
@@ -567,13 +576,13 @@ const TeacherAttendance = () => {
         {/* -------- STAFF ATTENDANCE TAB -------- */}
         {activeTab === "staff" && (
           <>
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-800 dark:text-white text-center mb-4">
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-800 dark:text-white text-center mt-6 mb-4">
               <i className="fa-solid fa-clipboard-user mr-2 text-3xl"></i>
               Office Staff Attendance
             </h1>
 
             {/* Top Bar */}
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-end gap-4 mb-6 border-b border-gray-200 dark:border-gray-700 pb-2">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3 sm:gap-4 mb-6 border-b border-gray-200 dark:border-gray-700 pb-3">
               <input
                 type="text"
                 placeholder="Search by name..."
@@ -583,10 +592,7 @@ const TeacherAttendance = () => {
                 }
                 className="border px-3 py-2 rounded w-full sm:w-64 dark:bg-gray-700 dark:text-white dark:border-gray-600"
               />
-              <Link
-                to={allRouterLink.teacherAttendanceRecord /* change if you have separate staff attendance record route */}
-                className="btn bgTheme text-white"
-              >
+              <Link to={recordLink} className="btn bgTheme text-white">
                 <i className="fa-solid fa-clipboard-list w-5"></i> Attendance
                 Record
               </Link>
@@ -594,27 +600,15 @@ const TeacherAttendance = () => {
 
             {/* Table */}
             <div className="w-full overflow-x-auto no-scrollbar max-h-[70vh] rounded-lg mb-10">
-              <table className="min-w-full divide-y divide-gray-300 dark:divide-gray-700 text-xs sm:text-sm">
+              <table className={tableClass}>
                 <thead className="bgTheme text-white z-2 sticky top-0">
                   <tr>
-                    <th className="px-4 py-3 text-center text-nowrap text-sm font-semibold">
-                      S.NO
-                    </th>
-                    <th className="px-4 py-3 text-center text-nowrap text-sm font-semibold">
-                      Staff Name
-                    </th>
-                    <th className="px-4 py-3 text-center text-nowrap text-sm font-semibold">
-                      Email
-                    </th>
-                    <th className="px-4 py-3 text-center text-nowrap text-sm font-semibold">
-                      Date
-                    </th>
-                    <th className="px-4 py-3 text-center text-nowrap text-sm font-semibold">
-                      Status
-                    </th>
-                    <th className="px-4 py-3 text-center text-nowrap text-sm font-semibold">
-                      Action
-                    </th>
+                    <th className={thClass}>S.NO</th>
+                    <th className={thClass}>Staff Name</th>
+                    <th className={thClass}>Email</th>
+                    <th className={thClass}>Date</th>
+                    <th className={thClass}>Status</th>
+                    <th className={thClass}>Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
@@ -634,7 +628,9 @@ const TeacherAttendance = () => {
                         <td className="px-4 py-3 text-nowrap text-gray-700 dark:text-gray-300">
                           {s.email}
                         </td>
-                        <td className="px-4 py-3">
+
+                        {/* Date */}
+                        <td className="px-4 py-3 min-w-[170px]">
                           <input
                             type="date"
                             disabled={staffAttendance[s.id]?.marked}
@@ -643,17 +639,19 @@ const TeacherAttendance = () => {
                               handleStaffChange(s.id, "date", e.target.value)
                             }
                             max={new Date().toISOString().split("T")[0]}
-                            className="border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 p-1 rounded text-center"
+                            className={dateInputClass}
                           />
                         </td>
-                        <td className="px-4 py-3">
+
+                        {/* Status */}
+                        <td className="px-4 py-3 min-w-[190px]">
                           <select
                             value={staffAttendance[s.id]?.status || ""}
                             onChange={(e) =>
                               handleStaffChange(s.id, "status", e.target.value)
                             }
                             disabled={staffAttendance[s.id]?.marked}
-                            className={`select select-bordered w-full focus:outline-none text-nowrap border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 ${
+                            className={`${selectBaseClass} ${
                               staffAttendance[s.id]?.marked
                                 ? "bg-gray-300 cursor-not-allowed"
                                 : ""
@@ -666,14 +664,14 @@ const TeacherAttendance = () => {
                           </select>
                         </td>
 
-                        <td className="px-4 py-3">
+                        {/* Action */}
+                        <td className="px-4 py-3 min-w-[130px]">
                           <button
                             onClick={() => handleStaffSave(s)}
                             disabled={
-                              staffAttendance[s.id]?.marked ||
-                              savingStaff[s.id]
+                              staffAttendance[s.id]?.marked || savingStaff[s.id]
                             }
-                            className={`btn w-28 ${
+                            className={`btn w-28 shrink-0 ${
                               staffAttendance[s.id]?.marked
                                 ? "bg-gray-400 textTheme cursor-not-allowed"
                                 : "bgTheme text-white"
@@ -694,7 +692,7 @@ const TeacherAttendance = () => {
                   ) : (
                     <tr>
                       <td
-                        colSpan="7"
+                        colSpan="6"
                         className="px-4 py-6 text-center text-gray-500 dark:text-gray-400"
                       >
                         No staff found
@@ -728,7 +726,9 @@ const TeacherAttendance = () => {
       {showAlert && (
         <dialog className="modal modal-open">
           <div className="modal-box bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200">
-            <h3 className="font-bold text-lg">Staff Attendance</h3>
+            <h3 className="font-bold text-lg">
+              {activeTab === "staff" ? "Staff Attendance" : "Teacher Attendance"}
+            </h3>
             <p className="py-4 capitalize">
               {alertMessage.split("\n").map((line, idx) => (
                 <span key={idx}>
