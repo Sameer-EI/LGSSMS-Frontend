@@ -36,6 +36,7 @@ export const AdmissionDetails = () => {
   const [selectedClass, setSelectedClass] = useState("");
   const [yearLevels, setYearLevels] = useState([]);
   const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState(""); // value actually sent to the API
   const [selectedDate, setSelectedDate] = useState("");
   const [schoolYears, setSchoolYears] = useState([]);
   const [selectedSchoolYear, setSelectedSchoolYear] = useState("");
@@ -93,9 +94,10 @@ export const AdmissionDetails = () => {
   // FETCHING (server-side paginated list + full download)
   // --------------------------------------------------------------
   // Fetches ONE page (1-based) and replaces the list with it.
-  // Server-side filters: ?level_id=<class id>&school_year_id=<school year id>
+  // Server-side filters: ?level_id=<class id>&school_year_id=<school year id>&student_name=<text>
   const buildFilterParams = () => {
     const params = {};
+    if (debouncedSearch.trim()) params.student_name = debouncedSearch.trim();
     if (selectedClass) params.level_id = selectedClass;
     if (selectedSchoolYear) params.school_year_id = selectedSchoolYear;
     return params;
@@ -210,11 +212,17 @@ export const AdmissionDetails = () => {
     getSchoolYears();
   }, []);
 
+  // Debounce typing: wait 400ms after the last keystroke before calling the API
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchInput.trim()), 400);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
   // First load + every time a server-side filter changes -> back to page 1
   useEffect(() => {
     getStudents({ page: 1 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedClass, selectedSchoolYear]);
+  }, [selectedClass, selectedSchoolYear, debouncedSearch]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -624,11 +632,8 @@ export const AdmissionDetails = () => {
     return matchesDate;
   });
 
-  const filterBysearch = filterData.filter((detail) =>
-    getStudentName(detail).startsWith(searchInput.toLowerCase())
-  );
-
-  const sortedData = [...filterBysearch].sort((a, b) =>
+  // Name search is done by the server (?student_name=) - no client-side name filter
+  const sortedData = [...filterData].sort((a, b) =>
     getStudentName(a).localeCompare(getStudentName(b))
   );
 
@@ -987,6 +992,7 @@ export const AdmissionDetails = () => {
                     setSelectedSchoolYear("");
                     setSelectedDate("");
                     setSearchInput("");
+                    setDebouncedSearch("");
                   }}
                   className="btn bgTheme text-white w-full sm:w-auto"
                 >
@@ -1007,7 +1013,7 @@ export const AdmissionDetails = () => {
                   <i className="fa-solid fa-file-arrow-down mr-2"></i>
                   {downloading
                     ? "Preparing..."
-                    : selectedClass || selectedSchoolYear
+                    : selectedClass || selectedSchoolYear || debouncedSearch
                     ? "Download Filtered Student Info"
                     : "Download All Student Info"}
                   <i className="fa-solid fa-caret-down ml-2"></i>
