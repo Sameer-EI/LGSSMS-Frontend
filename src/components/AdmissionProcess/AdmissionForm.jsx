@@ -16,6 +16,15 @@ import { data, useNavigate } from "react-router-dom";
 import AdmissionSuccessful from "../Modals/AdmissionSuccessful";
 import { AuthContext } from "../../context/AuthContext";
 
+// ---- Bulk admission (async job) settings ----
+const BULK_START_URL = "d/admission/bulk-admission/";
+const BULK_STATUS_URL = "d/admission/bulk-admission-status/";
+const POLL_INTERVAL_MS = 1500; // poll every 1-2 seconds
+const MAX_POLL_FAILURES = 5; // consecutive network failures tolerated while polling
+const MAX_POLL_DURATION_MS = 15 * 60 * 1000; // stop waiting after 15 minutes
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export const AdmissionForm = () => {
   const { axiosInstance } = useContext(AuthContext);
   const navigate = useNavigate();
@@ -57,14 +66,20 @@ export const AdmissionForm = () => {
   const [createBankError, setCreateBankError] = useState("");
   const [bankQuery, setBankQuery] = useState(""); // visible text in input
 
-  // Add this state near your other useState declarations
+  // ---- Bulk upload states ----
   const [showBulkUploadModal, setShowBulkUploadModal] = useState(false);
   const [bulkUploadFile, setBulkUploadFile] = useState(null);
   const [bulkUploadLoading, setBulkUploadLoading] = useState(false);
   const [bulkUploadError, setBulkUploadError] = useState("");
   const [bulkUploadSuccess, setBulkUploadSuccess] = useState("");
-  // Add this with your other useState declarations
   const [bulkUploadSchoolYear, setBulkUploadSchoolYear] = useState("");
+  // { processed, total, stage: "uploading" | "processing" }
+  const [bulkUploadProgress, setBulkUploadProgress] = useState(null);
+  // { created, failed, total, errors: [{sheet,row,reason}] }
+  const [bulkUploadResult, setBulkUploadResult] = useState(null);
+  // Incremented to cancel an in-flight polling loop (modal closed / unmounted / new upload)
+  const bulkRunRef = useRef(0);
+  const bulkCloseTimerRef = useRef(null);
 
   const {
     register,
@@ -167,11 +182,12 @@ export const AdmissionForm = () => {
     }
   }, [selectedBankId, bankNames]);
 
+  // Stop polling + timers when the component unmounts
   useEffect(() => {
-    const getBankNames = async () => {
-      // ... existing code
+    return () => {
+      bulkRunRef.current += 1;
+      if (bulkCloseTimerRef.current) clearTimeout(bulkCloseTimerRef.current);
     };
-    getBankNames();
   }, []);
 
   // NEW: Auto-calculate percentage
@@ -303,21 +319,51 @@ export const AdmissionForm = () => {
     fetchAllData();
   }, []);
 
-  // Add this handler function
-  const handleBulkUploadClick = () => {
-    setShowBulkUploadModal(true);
-    setBulkUploadFile(null);
-    setBulkUploadError("");
-    setBulkUploadSuccess("");
+  // --------------------------------------------------------------
+  // BULK UPLOAD (start job -> poll status until done / failed)
+  // --------------------------------------------------------------
+  const clearBulkCloseTimer = () => {
+    if (bulkCloseTimerRef.current) {
+      clearTimeout(bulkCloseTimerRef.current);
+      bulkCloseTimerRef.current = null;
+    }
   };
 
-  // Add this close handler
-  const handleCloseBulkUploadModal = () => {
-    setShowBulkUploadModal(false);
+  const resetBulkState = () => {
     setBulkUploadFile(null);
-    setBulkUploadSchoolYear(""); // Clear this too
+    setBulkUploadSchoolYear("");
     setBulkUploadError("");
     setBulkUploadSuccess("");
+    setBulkUploadProgress(null);
+    setBulkUploadResult(null);
+    setBulkUploadLoading(false);
+  };
+
+  const handleBulkUploadClick = () => {
+    bulkRunRef.current += 1; // cancel anything still running
+    clearBulkCloseTimer();
+    resetBulkState();
+    setShowBulkUploadModal(true);
+  };
+
+  const handleCloseBulkUploadModal = () => {
+    // Cancels the polling loop (the job itself keeps running on the server)
+    bulkRunRef.current += 1;
+    clearBulkCloseTimer();
+    setShowBulkUploadModal(false);
+    resetBulkState();
+  };
+
+  const getBulkErrorMessage = (err) => {
+    const d = err?.response?.data;
+    if (typeof d === "string" && d.trim() && d.length < 300) return d;
+    return (
+      d?.message ||
+      d?.detail ||
+      d?.error ||
+      err?.message ||
+      "An error occurred during bulk upload"
+    );
   };
 
   const handleBulkUpload = async (e) => {
@@ -332,92 +378,161 @@ export const AdmissionForm = () => {
       return;
     }
 
+    const runId = ++bulkRunRef.current;
+    clearBulkCloseTimer();
+
     setBulkUploadLoading(true);
     setBulkUploadError("");
     setBulkUploadSuccess("");
+    setBulkUploadResult(null);
+    setBulkUploadProgress({ processed: 0, total: 0, stage: "uploading" });
 
     try {
+      // 1) Start the job
       const formData = new FormData();
       formData.append("file", bulkUploadFile);
 
-      const response = await axiosInstance.post(
-        `d/admission/bulk-admission/?school_year=${bulkUploadSchoolYear}`,
-        formData,
-        {
-          headers: {
-            "Content-Type": "multipart/form-data",
-          },
-        }
-      );
+      const startRes = await axiosInstance.post(BULK_START_URL, formData, {
+        params: { school_year: bulkUploadSchoolYear },
+        headers: { "Content-Type": "multipart/form-data" },
+      });
 
-      // Check if there are errors in the response
-      if (response.data?.errors && response.data.errors.length > 0) {
-        // Format the error messages
-        let errorMessages = [];
+      if (runId !== bulkRunRef.current) return; // cancelled
 
-        // Group errors by sheet for better organization
-        const errorsBySheet = {};
-        response.data.errors.forEach((error) => {
-          if (!errorsBySheet[error.sheet]) {
-            errorsBySheet[error.sheet] = [];
-          }
-          errorsBySheet[error.sheet].push(`Row ${error.row}: ${error.reason}`);
-        });
-
-        // Build the error message
-        errorMessages.push("Bulk upload completed with errors:");
-        errorMessages.push(`Created: ${response.data.created || 0} records`);
-        errorMessages.push("");
-
-        // Add errors grouped by sheet
-        Object.keys(errorsBySheet).forEach((sheet) => {
-          errorMessages.push(`${sheet}:`);
-          errorsBySheet[sheet].forEach((error) => {
-            errorMessages.push(`  ${error}`);
-          });
-          errorMessages.push("");
-        });
-
-        // Also show a summary
-
-        // Set the formatted error message
-        setBulkUploadError(errorMessages.join("\n"));
-
-        // Clear file but keep school year selection
-        setBulkUploadFile(null);
-      } else {
-        // No errors - show success message
-        setBulkUploadSuccess(
-          response.data?.message ||
-          "Bulk upload completed successfully!" +
-          (response.data?.created
-            ? ` Created: ${response.data.created} records`
-            : "")
+      const jobId = startRes.data?.job_id;
+      if (!jobId) {
+        throw new Error(
+          startRes.data?.message || "Server did not return a job id"
         );
-
-        // Reset after successful upload
-        setBulkUploadFile(null);
-        setBulkUploadSchoolYear("");
-
-        // Close modal after 2 seconds
-        setTimeout(() => {
-          setShowBulkUploadModal(false);
-          setBulkUploadSuccess("");
-          setBulkUploadError("");
-        }, 2000);
       }
-    } catch (error) {
-      // Handle network or server errors
-      const errorMessage =
-        error.response?.data?.message ||
-        error.response?.data?.detail ||
-        error.message ||
-        "An error occurred during bulk upload";
-      setBulkUploadError(`Upload failed: ${errorMessage}`);
+
+      setBulkUploadProgress({ processed: 0, total: 0, stage: "processing" });
+
+      // 2) Poll the status endpoint every POLL_INTERVAL_MS
+      const startedAt = Date.now();
+      let consecutiveFailures = 0;
+
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        await sleep(POLL_INTERVAL_MS);
+        if (runId !== bulkRunRef.current) return; // cancelled while waiting
+
+        let statusData;
+        try {
+          const res = await axiosInstance.get(BULK_STATUS_URL, {
+            params: { job_id: jobId },
+          });
+          statusData = res.data || {};
+          consecutiveFailures = 0;
+        } catch (pollErr) {
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= MAX_POLL_FAILURES) throw pollErr;
+          continue; // transient network error -> try again
+        }
+
+        if (runId !== bulkRunRef.current) return;
+
+        setBulkUploadProgress({
+          processed: statusData.processed_rows ?? 0,
+          total: statusData.total_rows ?? 0,
+          stage: "processing",
+        });
+
+        const jobStatus = String(statusData.status || "").toLowerCase();
+
+        // ---- DONE ----
+        if (jobStatus === "done") {
+          const errorList = Array.isArray(statusData.errors)
+            ? statusData.errors
+            : [];
+          const created = statusData.created ?? 0;
+          const failed = statusData.failed ?? errorList.length;
+
+          setBulkUploadResult({
+            created,
+            failed,
+            total: statusData.total_rows ?? created + failed,
+            errors: errorList,
+          });
+          setBulkUploadFile(null);
+
+          if (failed === 0 && errorList.length === 0) {
+            setBulkUploadSchoolYear("");
+            setBulkUploadSuccess(
+              `Bulk admission completed successfully! ${created} student${
+                created === 1 ? "" : "s"
+              } created.`
+            );
+            // Auto close after success
+            bulkCloseTimerRef.current = setTimeout(() => {
+              setShowBulkUploadModal(false);
+              resetBulkState();
+            }, 3000);
+          }
+          return;
+        }
+
+        // ---- FAILED ----
+        if (jobStatus === "failed") {
+          const errorList = Array.isArray(statusData.errors)
+            ? statusData.errors
+            : [];
+          if (errorList.length > 0) {
+            setBulkUploadResult({
+              created: statusData.created ?? 0,
+              failed: statusData.failed ?? errorList.length,
+              total: statusData.total_rows ?? 0,
+              errors: errorList,
+            });
+          }
+          setBulkUploadFile(null);
+          setBulkUploadError(
+            statusData.error ||
+              statusData.detail ||
+              statusData.message ||
+              "Bulk admission failed. Please check your file and try again."
+          );
+          return;
+        }
+
+        // ---- still pending / processing -> keep polling (with a safety timeout) ----
+        if (Date.now() - startedAt > MAX_POLL_DURATION_MS) {
+          throw new Error(
+            "Bulk admission is taking longer than expected. It may still be running - please check the admission list later."
+          );
+        }
+      }
+    } catch (err) {
+      if (runId !== bulkRunRef.current) return;
+      setBulkUploadError(`Upload failed: ${getBulkErrorMessage(err)}`);
     } finally {
-      setBulkUploadLoading(false);
+      if (runId === bulkRunRef.current) {
+        setBulkUploadLoading(false);
+        setBulkUploadProgress(null);
+      }
     }
   };
+
+  // errors grouped by sheet for display
+  const bulkErrorsBySheet = (bulkUploadResult?.errors || []).reduce(
+    (acc, item) => {
+      const sheet = item.sheet || "Sheet";
+      if (!acc[sheet]) acc[sheet] = [];
+      acc[sheet].push(item);
+      return acc;
+    },
+    {}
+  );
+
+  const bulkPercent =
+    bulkUploadProgress && bulkUploadProgress.total > 0
+      ? Math.min(
+          100,
+          Math.round(
+            (bulkUploadProgress.processed / bulkUploadProgress.total) * 100
+          )
+        )
+      : 0;
 
   const onSubmit = async (data) => {
     setLoading(true);
@@ -1780,7 +1895,6 @@ export const AdmissionForm = () => {
         </div>
 
         {/* Academic Information Section */}
-        {/* Academic Information Section */}
         <div className="bg-base-200 p-6 rounded-box mb-6">
           <h2 className="text-2xl font-bold mb-4">Academic Information</h2>
 
@@ -2828,13 +2942,17 @@ export const AdmissionForm = () => {
           </div>
         </dialog>
       )}
-      {/* Bulk Upload Modal */}
+
+      {/* ================= Bulk Upload Modal ================= */}
       {showBulkUploadModal && (
         <div className="modal modal-open">
-          <div className="modal-box dark:bg-gray-800 dark:text-gray-100 max-w-2xl">
+          <div className="modal-box dark:bg-gray-800 dark:text-gray-100 w-11/12 max-w-2xl max-h-[92vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="font-bold text-xl">Bulk Upload Admission Data</h3>
+              <h3 className="font-bold text-lg sm:text-xl">
+                Bulk Upload Admission Data
+              </h3>
               <button
+                type="button"
                 onClick={handleCloseBulkUploadModal}
                 className="btn btn-sm btn-circle btn-ghost"
               >
@@ -2843,139 +2961,264 @@ export const AdmissionForm = () => {
             </div>
 
             <div className="space-y-4 mt-2">
-              {/* Error/Success Messages */}
+              {/* ---- General error (validation / network / job failed) ---- */}
               {bulkUploadError && (
                 <div className="bg-red-50 border border-red-300 rounded-lg p-4 dark:bg-red-900/20 dark:border-red-800">
                   <div className="flex items-start gap-3">
                     <i className="fa-solid fa-circle-exclamation text-red-600 dark:text-red-400 text-lg mt-0.5"></i>
-                    <div className="flex-1">
-                      <p className="font-semibold text-red-800 dark:text-red-300 mb-2">
-                        Bulk Upload Completed with Errors
-                      </p>
-                      <div className="text-sm text-red-700 dark:text-red-400 whitespace-pre-line font-mono bg-red-50 dark:bg-red-900/30 p-3 rounded overflow-x-auto max-h-60 overflow-y-auto">
-                        {bulkUploadError}
-                      </div>
-                    </div>
+                    <p className="text-sm font-medium text-red-800 dark:text-red-300 break-words">
+                      {bulkUploadError}
+                    </p>
                   </div>
                 </div>
               )}
 
+              {/* ---- Success ---- */}
               {bulkUploadSuccess && (
                 <div className="bg-green-50 border border-green-300 rounded-lg p-4 dark:bg-green-900/20 dark:border-green-800">
                   <div className="flex items-start gap-3">
                     <i className="fa-solid fa-circle-check text-green-600 dark:text-green-400 text-lg mt-0.5"></i>
-                    <div className="flex-1">
-                      <p className="font-semibold text-green-800 dark:text-green-300">
-                        {bulkUploadSuccess}
-                      </p>
-                    </div>
+                    <p className="font-semibold text-green-800 dark:text-green-300">
+                      {bulkUploadSuccess}
+                    </p>
                   </div>
                 </div>
               )}
-              <div className="space-y-6">
-                {/* Upload Section */}
-                <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 text-center">
-                  <input
-                    type="file"
-                    id="bulk-upload-file"
-                    accept=".xlsx,.xls,.csv"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files[0];
-                      if (file) {
-                        if (file.size > 10 * 1024 * 1024) {
-                          setBulkUploadError(
-                            "File size must be less than 10MB"
-                          );
-                          return;
-                        }
 
-                        const validTypes = [
-                          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                          "application/vnd.ms-excel",
-                          "text/csv",
-                        ];
-
-                        if (
-                          !validTypes.includes(file.type) &&
-                          !file.name.match(/\.(xlsx|xls)$/i)
-                        ) {
-                          setBulkUploadError("Please upload Excel");
-                          return;
-                        }
-
-                        setBulkUploadFile(file);
-                        setBulkUploadError("");
-                      }
-                    }}
-                  />
-
-                  <div className="flex flex-col items-center gap-3">
-                    <p className="text-sm text-gray-500">
-                      Upload Excel or CSV file (Max 10MB)
-                    </p>
-                    <label htmlFor="bulk-upload-file" className="btn btn-sm">
-                      Choose File
-                    </label>
+              {/* ---- Result summary + row errors ---- */}
+              {bulkUploadResult && (
+                <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+                  <div className="grid grid-cols-3 text-center bg-base-200">
+                    <div className="p-3">
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Total rows
+                      </p>
+                      <p className="text-lg font-bold">
+                        {bulkUploadResult.total}
+                      </p>
+                    </div>
+                    <div className="p-3">
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Created
+                      </p>
+                      <p className="text-lg font-bold text-green-600 dark:text-green-400">
+                        {bulkUploadResult.created}
+                      </p>
+                    </div>
+                    <div className="p-3">
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Failed
+                      </p>
+                      <p
+                        className={`text-lg font-bold ${
+                          bulkUploadResult.failed > 0
+                            ? "text-red-600 dark:text-red-400"
+                            : ""
+                        }`}
+                      >
+                        {bulkUploadResult.failed}
+                      </p>
+                    </div>
                   </div>
 
-                  {bulkUploadFile && (
-                    <div className="mt-4 p-4 bg-base-200 rounded-lg flex items-center justify-between">
-                      <div>
-                        <p className="font-medium">{bulkUploadFile.name}</p>
-                        <p className="text-sm text-gray-500">
-                          {(bulkUploadFile.size / 1024 / 1024).toFixed(2)} MB
-                        </p>
+                  {bulkUploadResult.errors.length > 0 && (
+                    <div className="p-3 sm:p-4 bg-red-50 dark:bg-red-900/20 border-t border-red-200 dark:border-red-800">
+                      <p className="font-semibold text-red-800 dark:text-red-300 mb-2 text-sm">
+                        <i className="fa-solid fa-triangle-exclamation mr-2"></i>
+                        {bulkUploadResult.errors.length} row
+                        {bulkUploadResult.errors.length === 1 ? "" : "s"} could
+                        not be created
+                      </p>
+                      <div className="max-h-60 overflow-y-auto space-y-3 pr-1">
+                        {Object.entries(bulkErrorsBySheet).map(
+                          ([sheet, items]) => (
+                            <div key={sheet}>
+                              <p className="text-xs font-bold uppercase tracking-wide text-red-700 dark:text-red-300 mb-1">
+                                {sheet}
+                              </p>
+                              <ul className="space-y-1">
+                                {items.map((item, idx) => (
+                                  <li
+                                    key={`${sheet}-${item.row}-${idx}`}
+                                    className="text-sm text-red-700 dark:text-red-300 bg-white/70 dark:bg-gray-900/40 rounded px-2 py-1 break-words"
+                                  >
+                                    <span className="font-semibold">
+                                      Row {item.row}:
+                                    </span>{" "}
+                                    {item.reason}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )
+                        )}
                       </div>
-
-                      <button
-                        onClick={() => setBulkUploadFile(null)}
-                        className="btn btn-sm btn-ghost text-error"
-                      >
-                        <i className="fa-solid fa-trash"></i>
-                      </button>
+                      <p className="text-xs text-gray-600 dark:text-gray-400 mt-3">
+                        Fix these rows in your file and upload it again. Rows
+                        that were already created will be rejected as
+                        duplicates, so you can re-upload only the failed rows.
+                      </p>
                     </div>
                   )}
                 </div>
+              )}
 
-                {/* School Year Section - FIXED */}
-                <div className="form-control">
-                  <label className="label">
-                    <span className="label-text flex items-center gap-2">
-                      <i className="fa-solid fa-calendar text-sm"></i>
-                      School Year <span className="text-error">*</span>
-                    </span>
-                  </label>
+              {/* ---- Progress while the job runs ---- */}
+              {bulkUploadLoading && bulkUploadProgress && (
+                <div className="bg-base-200 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm font-semibold flex items-center gap-2">
+                      <i className="fa-solid fa-spinner fa-spin"></i>
+                      {bulkUploadProgress.stage === "uploading"
+                        ? "Uploading file..."
+                        : "Processing admissions..."}
+                    </p>
+                    {bulkUploadProgress.total > 0 && (
+                      <p className="text-sm font-medium">{bulkPercent}%</p>
+                    )}
+                  </div>
 
-                  <select
-                    className="select select-bordered w-full focus:outline-none cursor-pointer"
-                    value={bulkUploadSchoolYear}
-                    onChange={(e) => setBulkUploadSchoolYear(e.target.value)}
-                  >
-                    <option value="">Select School Year</option>
-                    {schoolYears.map((schoolYear) => (
-                      <option value={schoolYear.year_name} key={schoolYear.id}>
-                        {schoolYear.year_name}
-                      </option>
-                    ))}
-                  </select>
-
-                  {!bulkUploadSchoolYear && bulkUploadFile && (
-                    <span className="text-error text-sm mt-1">
-                      School year is required for bulk upload
-                    </span>
+                  {bulkUploadProgress.total > 0 ? (
+                    <progress
+                      className="progress progress-primary w-full"
+                      value={bulkUploadProgress.processed}
+                      max={bulkUploadProgress.total}
+                    ></progress>
+                  ) : (
+                    <progress className="progress progress-primary w-full"></progress>
                   )}
+
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                    {bulkUploadProgress.total > 0
+                      ? `${bulkUploadProgress.processed} of ${bulkUploadProgress.total} rows processed. `
+                      : ""}
+                    Please keep this window open.
+                  </p>
                 </div>
-              </div>
+              )}
+
+              {/* ---- File + school year (hidden while a job is running or after a clean success) ---- */}
+              {!bulkUploadSuccess && (
+                <div className="space-y-6">
+                  {/* Upload Section */}
+                  <div
+                    className={`border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 sm:p-8 text-center ${
+                      bulkUploadLoading ? "opacity-50 pointer-events-none" : ""
+                    }`}
+                  >
+                    <input
+                      type="file"
+                      id="bulk-upload-file"
+                      accept=".xlsx,.xls,.csv"
+                      className="hidden"
+                      disabled={bulkUploadLoading}
+                      onChange={(e) => {
+                        const file = e.target.files[0];
+                        if (file) {
+                          if (file.size > 10 * 1024 * 1024) {
+                            setBulkUploadError(
+                              "File size must be less than 10MB"
+                            );
+                            return;
+                          }
+
+                          const validTypes = [
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            "application/vnd.ms-excel",
+                            "text/csv",
+                          ];
+
+                          if (
+                            !validTypes.includes(file.type) &&
+                            !file.name.match(/\.(xlsx|xls)$/i)
+                          ) {
+                            setBulkUploadError("Please upload Excel");
+                            return;
+                          }
+
+                          setBulkUploadFile(file);
+                          setBulkUploadError("");
+                          setBulkUploadResult(null);
+                        }
+                        // allow re-selecting the same file again
+                        e.target.value = "";
+                      }}
+                    />
+
+                    <div className="flex flex-col items-center gap-3">
+                      <p className="text-sm text-gray-500">
+                        Upload Excel or CSV file (Max 10MB)
+                      </p>
+                      <label htmlFor="bulk-upload-file" className="btn btn-sm">
+                        Choose File
+                      </label>
+                    </div>
+
+                    {bulkUploadFile && (
+                      <div className="mt-4 p-4 bg-base-200 rounded-lg flex items-center justify-between gap-3">
+                        <div className="min-w-0 text-left">
+                          <p className="font-medium truncate">
+                            {bulkUploadFile.name}
+                          </p>
+                          <p className="text-sm text-gray-500">
+                            {(bulkUploadFile.size / 1024 / 1024).toFixed(2)} MB
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setBulkUploadFile(null)}
+                          className="btn btn-sm btn-ghost text-error"
+                        >
+                          <i className="fa-solid fa-trash"></i>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* School Year Section */}
+                  <div className="form-control">
+                    <label className="label">
+                      <span className="label-text flex items-center gap-2">
+                        <i className="fa-solid fa-calendar text-sm"></i>
+                        School Year <span className="text-error">*</span>
+                      </span>
+                    </label>
+
+                    <select
+                      className="select select-bordered w-full focus:outline-none cursor-pointer"
+                      value={bulkUploadSchoolYear}
+                      disabled={bulkUploadLoading}
+                      onChange={(e) => setBulkUploadSchoolYear(e.target.value)}
+                    >
+                      <option value="">Select School Year</option>
+                      {schoolYears.map((schoolYear) => (
+                        <option
+                          value={schoolYear.year_name}
+                          key={schoolYear.id}
+                        >
+                          {schoolYear.year_name}
+                        </option>
+                      ))}
+                    </select>
+
+                    {!bulkUploadSchoolYear && bulkUploadFile && (
+                      <span className="text-error text-sm mt-1">
+                        School year is required for bulk upload
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Preview Info */}
-              {bulkUploadFile && (
+              {bulkUploadFile && !bulkUploadLoading && !bulkUploadSuccess && (
                 <div className="bg-base-200 p-4 rounded-lg">
                   <h4 className="font-semibold mb-2 flex items-center gap-2">
                     <i className="fa-solid fa-eye"></i>
                     Upload Preview
                   </h4>
-                  <p className="text-sm">
+                  <p className="text-sm break-words">
                     File ready for upload:{" "}
                     <strong>{bulkUploadFile.name}</strong>
                   </p>
@@ -2986,38 +3229,43 @@ export const AdmissionForm = () => {
               )}
 
               {/* Action Buttons */}
-              <div className="modal-action">
+              <div className="modal-action flex-col-reverse sm:flex-row gap-2">
                 <button
                   type="button"
-                  className="btn btn-ghost"
+                  className="btn btn-ghost w-full sm:w-auto"
                   onClick={handleCloseBulkUploadModal}
-                  disabled={bulkUploadLoading}
                 >
-                  Cancel
+                  {bulkUploadLoading
+                    ? "Stop Watching"
+                    : bulkUploadResult || bulkUploadSuccess
+                    ? "Close"
+                    : "Cancel"}
                 </button>
 
-                <button
-                  type="button"
-                  className="btn bgTheme text-white gap-2"
-                  disabled={
-                    !bulkUploadFile ||
-                    !bulkUploadSchoolYear ||
-                    bulkUploadLoading
-                  }
-                  onClick={handleBulkUpload}
-                >
-                  {bulkUploadLoading ? (
-                    <>
-                      <i className="fa-solid fa-spinner fa-spin"></i>
-                      Uploading...
-                    </>
-                  ) : (
-                    <>
-                      <i className="fa-solid fa-upload"></i>
-                      Upload & Process
-                    </>
-                  )}
-                </button>
+                {!bulkUploadSuccess && (
+                  <button
+                    type="button"
+                    className="btn bgTheme text-white gap-2 w-full sm:w-auto"
+                    disabled={
+                      !bulkUploadFile ||
+                      !bulkUploadSchoolYear ||
+                      bulkUploadLoading
+                    }
+                    onClick={handleBulkUpload}
+                  >
+                    {bulkUploadLoading ? (
+                      <>
+                        <i className="fa-solid fa-spinner fa-spin"></i>
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <i className="fa-solid fa-upload"></i>
+                        Upload & Process
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
           </div>

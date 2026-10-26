@@ -43,6 +43,7 @@ export const DirectorDashboard = () => {
     loadAllDashboardData();
   }, []);
 
+  // Track dark mode (the page toggles a "dark" class on <html>)
   const [isDark, setIsDark] = useState(
     document.documentElement.classList.contains("dark")
   );
@@ -59,6 +60,78 @@ export const DirectorDashboard = () => {
 
     return () => observer.disconnect();
   }, []);
+
+  // ---------- Theme-aware chart styling ----------
+  const textColor = isDark ? "#e5e7eb" : "#1f2937";
+  const gridColor = isDark ? "#374151" : "#e5e7eb";
+
+  const tooltipBg = isDark ? "#111827" : "#ffffff";
+  const tooltipText = isDark ? "#f9fafb" : "#111827";
+  const tooltipBorder = isDark ? "#4b5563" : "#d1d5db";
+
+  const escapeHtml = (v) =>
+    String(v ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+  // Fully custom tooltip with inline colours, so no global CSS or inherited
+  // colour can turn it into white-on-white again. Works for pie, bar and line.
+  const customTooltip = ({ series, seriesIndex, dataPointIndex, w }) => {
+    const isPie = !Array.isArray(series[seriesIndex]);
+    const label = isPie
+      ? w.globals.labels[seriesIndex]
+      : w.globals.labels?.[dataPointIndex] ??
+        w.globals.categoryLabels?.[dataPointIndex] ??
+        "";
+    const name = isPie ? "" : w.globals.seriesNames?.[seriesIndex] ?? "";
+    const value = isPie
+      ? series[seriesIndex]
+      : series[seriesIndex][dataPointIndex];
+    const dot = w.globals.colors?.[seriesIndex] || "#3b82f6";
+
+    return `
+      <div style="background:${tooltipBg};color:${tooltipText};border:1px solid ${tooltipBorder};border-radius:6px;padding:8px 12px;font-size:13px;line-height:1.5;box-shadow:0 4px 12px rgba(0,0,0,0.25);">
+        <div style="font-weight:600;margin-bottom:4px;color:${tooltipText};">${escapeHtml(label)}</div>
+        <div style="display:flex;align-items:center;gap:8px;color:${tooltipText};">
+          <span style="width:10px;height:10px;border-radius:50%;background:${dot};display:inline-block;"></span>
+          <span style="color:${tooltipText};">${name ? escapeHtml(name) + ": " : ""}<strong style="color:${tooltipText};">${escapeHtml(value)}</strong></span>
+        </div>
+      </div>`;
+  };
+
+  // Shared options applied to every chart.
+  const baseChartOptions = {
+    theme: { mode: isDark ? "dark" : "light" },
+    chart: {
+      toolbar: { show: false },
+      background: "transparent",
+      foreColor: textColor,
+    },
+    grid: { borderColor: gridColor },
+    tooltip: {
+      theme: isDark ? "dark" : "light",
+      style: { fontSize: "13px" },
+      custom: customTooltip,
+    },
+    legend: {
+      position: "bottom",
+      labels: { colors: textColor },
+    },
+  };
+
+  const axisTitle = (text) => ({
+    text,
+    style: { fontSize: "14px", fontWeight: 600, color: textColor },
+  });
+
+  // Hide the floating "0" labels on empty bars
+  const hideZeroLabels = {
+    enabled: true,
+    formatter: (val) => (val === 0 ? "" : val),
+  };
+
+  const chartKey = isDark ? "dark" : "light";
 
   const classOrder = [
     "Pre Nursery",
@@ -81,10 +154,10 @@ export const DirectorDashboard = () => {
 
   const classStrength = dashboardData?.class_strength || {};
 
-  const sortedClasses = classOrder.filter(c => classStrength.hasOwnProperty(c));
-  const sortedData = sortedClasses.map(c => classStrength[c]);
-
-
+  const sortedClasses = classOrder.filter((c) =>
+    Object.prototype.hasOwnProperty.call(classStrength, c)
+  );
+  const sortedData = sortedClasses.map((c) => classStrength[c]);
 
   if (loading) {
     return (
@@ -135,16 +208,33 @@ export const DirectorDashboard = () => {
   return (
     <div className="p-4 space-y-6 mb-24 md:mb-10">
       <LoginSuccessHandler />
+
+      {/* Forces readable chart text/tooltips even if global CSS overrides them */}
+      <style>{`
+        .apexcharts-tooltip {
+          background: ${tooltipBg} !important;
+          border: 1px solid ${tooltipBorder} !important;
+          color: ${tooltipText} !important;
+          box-shadow: none !important;
+        }
+        .apexcharts-tooltip * { color: ${tooltipText} !important; }
+        .apexcharts-xaxis-texts-g text,
+        .apexcharts-yaxis-texts-g text,
+        .apexcharts-xaxis-title-text,
+        .apexcharts-yaxis-title-text {
+          fill: ${textColor} !important;
+        }
+        .apexcharts-legend-text { color: ${textColor} !important; }
+        .apexcharts-gridline { stroke: ${gridColor} !important; }
+      `}</style>
+
       <h3 className="text-3xl font-bold text-center text-gray-800 dark:text-gray-100">
         Director Dashboard
       </h3>
+
       {/* SUMMARY CARDS */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
         {Object.entries(dashboardData.summary || {}).map(([key, value]) => (
-          // <div
-          //   key={key}
-          //   className="border rounded-lg shadow-lg overflow-hidden transition-all hover:shadow-xl borderTheme bg-white dark:bg-gray-800 dark:border-gray-700"
-          // >
           <div
             key={key}
             onClick={() => {
@@ -152,14 +242,15 @@ export const DirectorDashboard = () => {
                 navigate("/newAdmissionList");
               }
             }}
-            className={`border rounded-lg shadow-lg overflow-hidden borderTheme bg-white dark:bg-gray-800 dark:border-gray-700 transition-all ${key === "new_admissions"
+            className={`border rounded-lg shadow-lg overflow-hidden borderTheme bg-white dark:bg-gray-800 dark:border-gray-700 transition-all ${
+              key === "new_admissions"
                 ? "cursor-pointer hover:shadow-2xl hover:-translate-y-1 hover:scale-105"
                 : ""
-              }`}
+            }`}
           >
             <div className="p-4 bgTheme text-white text-center">
               <h2 className="text-xl font-bold capitalize">
-                {key.replace("_", " ")}
+                {key.replace(/_/g, " ")}
               </h2>
             </div>
             <div className="p-4 text-center text-2xl font-semibold text-gray-800 dark:text-gray-100">
@@ -187,27 +278,15 @@ export const DirectorDashboard = () => {
               </div>
               <div className="p-4">
                 <Chart
+                  key={`${role}-${chartKey}`}
                   height={height}
                   type="pie"
                   width="100%"
                   options={{
+                    ...baseChartOptions,
                     labels: ["Male", "Female"],
                     colors: [constants.usColor, constants.canadaPink],
-                    legend: {
-                      position: "bottom",
-                      labels: {
-                        colors: [
-                          () =>
-                            document.documentElement.classList.contains("dark")
-                              ? "#ffffff"
-                              : "#000000",
-                          () =>
-                            document.documentElement.classList.contains("dark")
-                              ? "#ffffff"
-                              : "#000000",
-                        ],
-                      },
-                    },
+                    stroke: { colors: [isDark ? "#1f2937" : "#ffffff"] },
                   }}
                   series={[data.count.male, data.count.female]}
                 />
@@ -226,10 +305,12 @@ export const DirectorDashboard = () => {
           </div>
           <div className="p-4">
             <Chart
+              key={`category-${chartKey}`}
               height={height}
               type="pie"
               width="100%"
               options={{
+                ...baseChartOptions,
                 labels: studentCategoryLabel,
                 colors: [
                   constants.italianGreen,
@@ -237,29 +318,7 @@ export const DirectorDashboard = () => {
                   constants.saffronOrange,
                   constants.usColor,
                 ],
-                legend: {
-                  position: "bottom",
-                  labels: {
-                    colors: [
-                      () =>
-                        document.documentElement.classList.contains("dark")
-                          ? "#ffffff"
-                          : "#000000",
-                      () =>
-                        document.documentElement.classList.contains("dark")
-                          ? "#ffffff"
-                          : "#000000",
-                      () =>
-                        document.documentElement.classList.contains("dark")
-                          ? "#ffffff"
-                          : "#000000",
-                      () =>
-                        document.documentElement.classList.contains("dark")
-                          ? "#ffffff"
-                          : "#000000",
-                    ],
-                  },
-                },
+                stroke: { colors: [isDark ? "#1f2937" : "#ffffff"] },
               }}
               series={studentCategorySeries}
             />
@@ -273,30 +332,19 @@ export const DirectorDashboard = () => {
           </div>
           <div className="p-4">
             <Chart
+              key={`income-${chartKey}`}
               type="bar"
               height={height}
               options={{
-                chart: { toolbar: { show: false }, background: "transparent" },
+                ...baseChartOptions,
                 xaxis: {
                   categories: incomeDistributionLabel,
-                  title: {
-                    text: "Income Range",
-                    style: {
-                      fontSize: "14px",
-                      fontWeight: 600,
-                      color: constants.textTheme,
-                    },
-                  },
+                  title: axisTitle("Income Range"),
+                  labels: { style: { colors: textColor } },
                 },
                 yaxis: {
-                  title: {
-                    text: "Number of Students",
-                    style: {
-                      fontSize: "14px",
-                      fontWeight: 600,
-                      color: constants.textTheme,
-                    },
-                  },
+                  title: axisTitle("Number of Students"),
+                  labels: { style: { colors: textColor } },
                 },
                 colors: [constants.usColor],
                 plotOptions: {
@@ -305,6 +353,7 @@ export const DirectorDashboard = () => {
                     columnWidth: "50%",
                   },
                 },
+                dataLabels: hideZeroLabels,
                 legend: { show: false },
               }}
               series={[{ name: "Students", data: incomeDistributionSeries }]}
@@ -322,30 +371,19 @@ export const DirectorDashboard = () => {
           </div>
           <div className="p-4">
             <Chart
+              key={`class-${chartKey}`}
               type="bar"
               height={height}
               options={{
-                chart: { toolbar: { show: false }, background: "transparent" },
+                ...baseChartOptions,
                 xaxis: {
                   categories: sortedClasses,
-                  title: {
-                    text: "Class",
-                    style: {
-                      fontSize: "14px",
-                      fontWeight: 600,
-                      color: constants.textTheme,
-                    },
-                  },
+                  title: axisTitle("Class"),
+                  labels: { style: { colors: textColor } },
                 },
                 yaxis: {
-                  title: {
-                    text: "Number of Student",
-                    style: {
-                      fontSize: "14px",
-                      fontWeight: 600,
-                      color: constants.textTheme,
-                    },
-                  },
+                  title: axisTitle("Number of Students"),
+                  labels: { style: { colors: textColor } },
                 },
                 colors: [constants.usColor],
                 plotOptions: {
@@ -354,6 +392,7 @@ export const DirectorDashboard = () => {
                     columnWidth: "50%",
                   },
                 },
+                dataLabels: hideZeroLabels,
               }}
               series={[
                 {
@@ -372,10 +411,11 @@ export const DirectorDashboard = () => {
           </div>
           <div className="p-4">
             <Chart
+              key={`year-${chartKey}`}
               type="line"
               height={height}
               options={{
-                chart: { toolbar: { show: false }, background: "transparent" },
+                ...baseChartOptions,
                 stroke: {
                   curve: "straight",
                   width: 5,
@@ -384,24 +424,12 @@ export const DirectorDashboard = () => {
                   categories: Object.keys(
                     dashboardData.students_per_year || {}
                   ),
-                  title: {
-                    text: "Year",
-                    style: {
-                      fontSize: "14px",
-                      fontWeight: 600,
-                      color: constants.textTheme,
-                    },
-                  },
+                  title: axisTitle("Year"),
+                  labels: { style: { colors: textColor } },
                 },
                 yaxis: {
-                  title: {
-                    text: "Number of Admissions",
-                    style: {
-                      fontSize: "14px",
-                      fontWeight: 600,
-                      color: constants.textTheme,
-                    },
-                  },
+                  title: axisTitle("Number of Admissions"),
+                  labels: { style: { colors: textColor } },
                 },
                 colors: [constants.usColor],
               }}

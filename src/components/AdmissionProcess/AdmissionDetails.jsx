@@ -27,6 +27,33 @@ const formatDMY = (value) => {
     : d.toLocaleDateString("en-GB").replaceAll("/", "-");
 };
 
+// ---- Stream (only exists for Class 11 & 12) ----
+// Works with "11", "Class 11", "11th", "XI", "Class XII" ...
+const isSeniorClass = (className) => {
+  const str = String(className ?? "").trim();
+  if (!str) return false;
+  const num = str.match(/\d+/);
+  if (num) return [11, 12].includes(Number(num[0]));
+  return /\bXII?\b/i.test(str); // roman numerals XI / XII
+};
+
+// Returns the stream for 11/12 students, "" for everyone else.
+// Adjust the field names if your API uses something different.
+const getStream = (s) => {
+  if (!isSeniorClass(s.class ?? s.year_level)) return "";
+  const raw =
+    s.stream ??
+    s.stream_name ??
+    s["stream name"] ??
+    s.stream_input?.name ??
+    "";
+  return typeof raw === "object" ? raw?.name ?? "" : String(raw ?? "").trim();
+};
+
+// Show the Stream column only when at least one exported student is in 11/12
+const hasSeniorStudents = (list) =>
+  list.some((s) => isSeniorClass(s.class ?? s.year_level));
+
 export const AdmissionDetails = () => {
   const { axiosInstance } = useContext(AuthContext);
   const [students, setStudents] = useState([]);
@@ -374,12 +401,17 @@ export const AdmissionDetails = () => {
   const handleDownloadExcel = (data) => {
     if (!data.length) return;
 
+    // Stream column only appears when the export contains Class 11/12 students
+    const includeStream = hasSeniorStudents(data);
+
     const formattedData = data.map((s) => ({
       ID: s.student_id ?? s.id ?? "",
       "Scholar No": s["scholar number"] ?? "",
       "Enrollment No": s.enrollment_no ?? "",
       Name: s.student_name ?? "",
       Class: s.class ?? "",
+      // Stream: filled only for Class 11 & 12, blank for other classes
+      ...(includeStream ? { Stream: getStream(s) } : {}),
       Age: s.age ?? "",
       Gender: s.gender ?? "",
       "Date of Birth": s.date_of_birth ?? "",
@@ -401,7 +433,6 @@ export const AdmissionDetails = () => {
       IFSC: s["bank details"]?.ifsc_code ?? "N/A",
       "Annual Income": s["annual income"] ?? s.annual_income ?? "",
       "School Year": s["school year"] ?? "",
-      // ---- newly added columns ----
       "Admission Date": formatDMY(s.admission_date),
       SSSMID: s.SSSMID ?? "",
       FMID: s.FMID_number ?? "",
@@ -419,6 +450,9 @@ export const AdmissionDetails = () => {
 
   const handleDownloadStudentDataPDF = (data) => {
     if (!data.length) return;
+
+    // Stream column only appears when the export contains Class 11/12 students
+    const includeStream = hasSeniorStudents(data);
 
     const doc = new jsPDF({
       orientation: "landscape",
@@ -465,6 +499,50 @@ export const AdmissionDetails = () => {
     };
     const safe = (v) => (v === null || v === undefined ? "" : String(v));
 
+    // ---- columns: [header, width(mm), halign] ----
+    const columns = [
+      ["ID", 8, "center"],
+      ["Sch/En", 20],
+      ["Name", 24],
+      ["Class", 13],
+      ["Age", 7, "center"],
+      ["Gender", 11],
+      ["DOB", 15],
+      ["Cat/Rel", 16],
+      ["Siblings", 10, "center"],
+      ["Active", 9, "center"],
+      ["RTE", 14],
+      ["Phone", 17],
+      ["Email", 22],
+      ["Parents", 20],
+      ["Guardian", 20],
+      ["Address", 34],
+      ["Aadhaar", 18],
+      ["Bank", 22],
+      ["Income", 14, "right"],
+      ["Year", 13],
+      ["Adm. Date", 15],
+      ["FMID/SSSMID", 22],
+      ["Ht/Wt", 12],
+      ["Qualif.", 22],
+    ];
+    // Stream goes right after "Class" (index 3) - only when needed
+    const STREAM_INDEX = 4;
+    if (includeStream) columns.splice(STREAM_INDEX, 0, ["Stream", 14]);
+
+    // Scale widths so the table always fits the A3 usable width (400mm)
+    const TOTAL_WIDTH = 398;
+    const sum = columns.reduce((t, c) => t + c[1], 0);
+    const scale = TOTAL_WIDTH / sum;
+
+    const columnStyles = {};
+    columns.forEach(([, width, halign], i) => {
+      columnStyles[i] = {
+        cellWidth: Math.round(width * scale * 10) / 10,
+        ...(halign ? { halign } : {}),
+      };
+    });
+
     const body = data.map((s) => {
       const id = safe(s.student_id ?? s.id);
       const scholar = safe(s["scholar number"] ?? "");
@@ -501,7 +579,6 @@ export const AdmissionDetails = () => {
       const annualIncome = fmtNumberIN(s["annual income"] ?? s.annual_income);
       const year = safe(s["school year"] ?? "");
 
-      // ---- newly added fields ----
       const admissionDate = formatDMY(s.admission_date);
       const fmidSssmid = `FM:${safe(s.FMID_number)}\nSSS:${safe(s.SSSMID)}`;
       const heightWeight = `H:${safe(s.height)}\nW:${safe(s.weight)}`;
@@ -509,12 +586,16 @@ export const AdmissionDetails = () => {
         s.mother_education
       )}`;
 
-      return [
+      const row = [
         id, schEnroll, name, className, age, gender, dob, catRel, siblings,
         active, rte, phone, email, parents, guardian, address, aadhaar, bank,
         annualIncome, year,
         admissionDate, fmidSssmid, heightWeight, qualification,
       ];
+
+      // Stream: value for Class 11/12, "-" for other classes
+      if (includeStream) row.splice(STREAM_INDEX, 0, getStream(s) || "-");
+      return row;
     });
 
     autoTable(doc, {
@@ -522,14 +603,7 @@ export const AdmissionDetails = () => {
       theme: "grid",
       showHead: "everyPage",
       rowPageBreak: "avoid",
-      head: [
-        [
-          "ID", "Sch/En", "Name", "Class", "Age", "Gender", "DOB", "Cat/Rel",
-          "Siblings", "Active", "RTE", "Phone", "Email", "Parents", "Guardian",
-          "Address", "Aadhaar", "Bank", "Income", "Year",
-          "Adm. Date", "FMID/SSSMID", "Ht/Wt", "Qualif.",
-        ],
-      ],
+      head: [columns.map((c) => c[0])],
       body,
       margin: { top: 15, left: margin, right: margin },
       styles: {
@@ -544,39 +618,13 @@ export const AdmissionDetails = () => {
         fontStyle: "bold",
       },
       alternateRowStyles: { fillColor: [248, 250, 252] },
-      // Total width = 398mm (A3 landscape usable width = 400mm)
-      columnStyles: {
-        0: { cellWidth: 8, halign: "center" },
-        1: { cellWidth: 20 },
-        2: { cellWidth: 24 },
-        3: { cellWidth: 13 },
-        4: { cellWidth: 7, halign: "center" },
-        5: { cellWidth: 11 },
-        6: { cellWidth: 15 },
-        7: { cellWidth: 16 },
-        8: { cellWidth: 10, halign: "center" },
-        9: { cellWidth: 9, halign: "center" },
-        10: { cellWidth: 14 },
-        11: { cellWidth: 17 },
-        12: { cellWidth: 22 },
-        13: { cellWidth: 20 },
-        14: { cellWidth: 20 },
-        15: { cellWidth: 34 },
-        16: { cellWidth: 18 },
-        17: { cellWidth: 22 },
-        18: { cellWidth: 14, halign: "right" },
-        19: { cellWidth: 13 },
-        20: { cellWidth: 15 },
-        21: { cellWidth: 22 },
-        22: { cellWidth: 12 },
-        23: { cellWidth: 22 },
-      },
-      didDrawPage: (data) => {
+      columnStyles,
+      didDrawPage: (d) => {
         const pageCount = doc.internal.getNumberOfPages();
         doc.setFontSize(8);
         doc.setTextColor(100);
         doc.text(
-          `Page ${data.pageNumber} of ${pageCount}`,
+          `Page ${d.pageNumber} of ${pageCount}`,
           pageWidth - margin,
           pageHeight - 6,
           { align: "right" }
