@@ -217,7 +217,8 @@ export const ViewDocuments = () => {
   const [details, setDetails] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
   const [yearLevels, setYearLevels] = useState([]);
-  const [teacherClasses, setTeacherClasses] = useState([]);
+  const [teacherClasses, setTeacherClasses] = useState([]); // [{ id, name }]
+  const [teacherClassesLoaded, setTeacherClassesLoaded] = useState(false);
 
   // Request state
   const [initialLoading, setInitialLoading] = useState(true);
@@ -229,6 +230,7 @@ export const ViewDocuments = () => {
   const [filters, setFilters] = useState(EMPTY_FILTERS); // applied (sent to API)
   const [searchInput, setSearchInput] = useState(""); // what the user is typing
   const [viewOption, setViewOption] = useState("my"); // teacher only
+  const [assignedClassId, setAssignedClassId] = useState(""); // teacher only
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
@@ -242,6 +244,12 @@ export const ViewDocuments = () => {
   const isPrivileged = !["student", "guardian", "teacher", "officestaff"].includes(
     userRole,
   );
+
+  const isTeacher = userRole === "teacher";
+  const isAssignedView = isTeacher && viewOption === "assigned";
+
+  // Teachers must wait until their classes are known before the first fetch
+  const classesReady = !isTeacher || teacherClassesLoaded;
 
   const canUpload =
     userRole === constants.roles.director ||
@@ -286,20 +294,33 @@ export const ViewDocuments = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Teacher's assigned classes (for the "assigned" view)
+  // Teacher's assigned classes (id + name) for the "assigned" view
   useEffect(() => {
-    if (userRole !== "teacher") return;
+    if (!isTeacher) return;
     let cancelled = false;
 
     (async () => {
       try {
         const res = await axiosInstance.get("/t/teacheryearlevel/");
         const list = Array.isArray(res.data) ? res.data : res.data?.results || [];
+
+        // NOTE: confirm in the Network tab which field holds the class id.
+        // Order of preference: year_level -> year_level_id -> id
+        const mapped = list
+          .map((c) => ({
+            id: c.year_level ?? c.year_level_id ?? c.id,
+            name: c.year_level_name,
+          }))
+          .filter((c) => c.id != null);
+
         if (!cancelled) {
-          setTeacherClasses(list.map((c) => c.year_level_name));
+          setTeacherClasses(mapped);
+          setAssignedClassId((prev) => prev || String(mapped[0]?.id ?? ""));
         }
       } catch (err) {
         console.error("Failed to load teacher classes", err);
+      } finally {
+        if (!cancelled) setTeacherClassesLoaded(true);
       }
     })();
 
@@ -327,11 +348,27 @@ export const ViewDocuments = () => {
   /* ------------------------------- fetch data ------------------------------- */
 
   useEffect(() => {
+    // Wait for the teacher's classes before the first request
+    if (!classesReady) return;
+
+    // Assigned view but the teacher has no classes -> nothing to fetch
+    if (isAssignedView && !assignedClassId) {
+      setDetails([]);
+      setTotalCount(0);
+      setError(false);
+      setFetching(false);
+      setInitialLoading(false);
+      return;
+    }
+
     const controller = new AbortController();
 
     const load = async () => {
       setFetching(true);
       setError(false);
+
+      // Teacher "assigned" view uses the class dropdown; admin uses filters.classId
+      const classParam = isAssignedView ? assignedClassId : filters.classId;
 
       // Only send params that have a value
       const params = {
@@ -339,7 +376,7 @@ export const ViewDocuments = () => {
         offset: (currentPage - 1) * pageSize,
       };
       if (serverRole) params.role = serverRole;
-      if (filters.classId) params.class = filters.classId;
+      if (classParam) params.class = classParam;
       if (filters.name) params.name = filters.name;
 
       try {
@@ -376,7 +413,17 @@ export const ViewDocuments = () => {
     load();
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPage, pageSize, serverRole, filters.classId, filters.name, reloadKey]);
+  }, [
+    currentPage,
+    pageSize,
+    serverRole,
+    filters.classId,
+    filters.name,
+    reloadKey,
+    classesReady,
+    isAssignedView,
+    assignedClassId,
+  ]);
 
   /* ------------------------------- handlers --------------------------------- */
 
@@ -400,6 +447,11 @@ export const ViewDocuments = () => {
     setCurrentPage(1);
   };
 
+  const handleAssignedClassChange = (value) => {
+    setAssignedClassId(value);
+    setCurrentPage(1);
+  };
+
   const handlePageSizeChange = (size) => {
     setPageSize(size);
     setCurrentPage(1);
@@ -409,6 +461,7 @@ export const ViewDocuments = () => {
     setFilters(EMPTY_FILTERS);
     setSearchInput("");
     setViewOption("my");
+    setAssignedClassId(String(teacherClasses[0]?.id ?? ""));
     setCurrentPage(1);
   };
 
@@ -490,8 +543,9 @@ export const ViewDocuments = () => {
     return Object.values(grouped);
   }, [details, apiBase]);
 
-  // Safety net: non-admin users only ever see their own rows
-  // (the API filter does the heavy lifting; this guards against over-fetching).
+  // Safety net: non-admin users only see rows of the right role / identity.
+  // Class filtering for teachers is done by the API via the `class` param,
+  // NOT here, so the table always matches what the dropdown selected.
   const rows = useMemo(() => {
     const same = (a, b) => a != null && b != null && String(a) === String(b);
 
@@ -506,7 +560,7 @@ export const ViewDocuments = () => {
         case "teacher":
           return viewOption === "my"
             ? p.role === "Teacher" && same(p.teacherId, teacherId)
-            : p.role === "Student" && teacherClasses.includes(p.yearLevel);
+            : p.role === "Student";
         default:
           return true;
       }
@@ -519,10 +573,10 @@ export const ViewDocuments = () => {
     guardianId,
     teacherId,
     officeStaffId,
-    teacherClasses,
   ]);
 
-  const showClassColumn = isPrivileged && filters.role === "student";
+  const showClassColumn =
+    (isPrivileged && filters.role === "student") || isAssignedView;
   const colSpan = allDocTypes.length + 3 + (showClassColumn ? 1 : 0);
   const showClassFilter = filters.role !== "office_staff";
 
@@ -573,9 +627,11 @@ export const ViewDocuments = () => {
             colSpan={colSpan}
             className="px-4 py-10 text-center text-sm text-gray-500 dark:text-gray-400"
           >
-            {hasActiveFilters
-              ? "No documents match your filters."
-              : "No documents available."}
+            {isAssignedView && teacherClasses.length === 0
+              ? "No classes are assigned to you."
+              : hasActiveFilters
+                ? "No documents match your filters."
+                : "No documents available."}
           </td>
         </tr>
       );
@@ -651,8 +707,8 @@ export const ViewDocuments = () => {
         </div>
 
         {/* Teacher view switch */}
-        {userRole === "teacher" && (
-          <div className="mb-4 flex items-center gap-4 border-b pb-2 dark:border-gray-700">
+        {isTeacher && (
+          <div className="mb-4 flex flex-wrap items-center gap-4 border-b pb-2 dark:border-gray-700">
             <select
               value={viewOption}
               onChange={(e) => handleViewOptionChange(e.target.value)}
@@ -661,6 +717,24 @@ export const ViewDocuments = () => {
               <option value="my">My Documents</option>
               <option value="assigned">Assigned Class Documents</option>
             </select>
+
+            {viewOption === "assigned" && (
+              <select
+                value={assignedClassId}
+                onChange={(e) => handleAssignedClassChange(e.target.value)}
+                disabled={teacherClasses.length === 0}
+                className="rounded border bg-white p-2 focus:outline-none dark:bg-gray-700 dark:text-gray-200"
+              >
+                {teacherClasses.length === 0 && (
+                  <option value="">No classes assigned</option>
+                )}
+                {teacherClasses.map((c) => (
+                  <option key={c.id} value={String(c.id)}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         )}
 

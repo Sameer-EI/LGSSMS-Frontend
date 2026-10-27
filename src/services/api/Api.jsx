@@ -19,31 +19,36 @@ export const fetchOfficeStaffAttendanceRecords = async () => {
   return res.data;
 };
 
+const STAFF_STATUS_KEY = {
+  present: "P",
+  absent: "A",
+  leave: "L",
+};
+
+const buildStaffPayload = (staffList, attendance, markedAt) => {
+  const payload = { marked_at: markedAt, P: [], A: [], L: [] };
+
+  staffList.forEach((s) => {
+    const shortStatus = STAFF_STATUS_KEY[attendance[s.id]?.status];
+    if (shortStatus) payload[shortStatus].push(s.id);
+  });
+
+  return payload;
+};
+
+// Local date (YYYY-MM-DD) used only as a fallback if a row has no date
+const todayLocal = () => {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+};
+
+// Single office staff attendance: uses the date picked on that row
 export const saveOfficeStaffAttendance = async (staffList, attendance) => {
   try {
-    const payload = {
-      marked_at: new Date().toISOString().split("T")[0],
-      P: [],
-      A: [],
-      L: [],
-    };
-
-    const statusMap = {
-      present: "P",
-      absent: "A",
-      leave: "L",
-    };
-
-    staffList.forEach((s) => {
-      const att = attendance[s.id];
-      if (!att?.status) return;
-
-      const shortStatus = statusMap[att.status];
-
-      if (shortStatus === "P") payload.P.push(s.id);
-      if (shortStatus === "A") payload.A.push(s.id);
-      if (shortStatus === "L") payload.L.push(s.id);
-    });
+    const markedAt = attendance[staffList[0]?.id]?.date || todayLocal();
+    const payload = buildStaffPayload(staffList, attendance, markedAt);
 
     console.log("Office staff attendance payload:", payload);
 
@@ -57,39 +62,28 @@ export const saveOfficeStaffAttendance = async (staffList, attendance) => {
   }
 };
 
-// multiple office staff attendance
+// Multiple office staff attendance: the API takes one marked_at per request,
+// so staff are grouped by their selected date and one request is sent per date
 export const saveAllOfficeStaffAttendance = async (
   attendanceMap,
   staffList,
 ) => {
   try {
-    const payload = {
-      marked_at: new Date().toISOString().split("T")[0],
-      P: [],
-      A: [],
-      L: [],
-    };
-
-    const statusMap = {
-      present: "P",
-      absent: "A",
-      leave: "L",
-    };
-
+    const byDate = {};
     staffList.forEach((s) => {
-      const att = attendanceMap[s.id];
-      if (!att?.status) return;
-
-      const shortStatus = statusMap[att.status];
-
-      if (shortStatus === "P") payload.P.push(s.id);
-      if (shortStatus === "A") payload.A.push(s.id);
-      if (shortStatus === "L") payload.L.push(s.id);
+      const date = attendanceMap[s.id]?.date || todayLocal();
+      (byDate[date] = byDate[date] || []).push(s);
     });
 
-    console.log("Office staff attendance payload:", payload);
+    const responses = await Promise.all(
+      Object.entries(byDate).map(([date, group]) => {
+        const payload = buildStaffPayload(group, attendanceMap, date);
+        console.log("Office staff attendance payload:", payload);
+        return axios.post(`${BASE_URL}/a/office-staff-attendance/`, payload);
+      }),
+    );
 
-    return await axios.post(`${BASE_URL}/a/office-staff-attendance/`, payload);
+    return responses[responses.length - 1];
   } catch (error) {
     console.error(
       "Error saving ALL staff attendance:",
@@ -98,7 +92,6 @@ export const saveAllOfficeStaffAttendance = async (
     throw error;
   }
 };
-
 // Update office staff attendance
 export const updateOfficeStaffAttendance = async (id, payload) => {
   try {

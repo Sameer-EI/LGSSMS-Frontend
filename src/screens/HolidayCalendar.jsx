@@ -1,7 +1,13 @@
 import React, { useState, useEffect } from "react";
 import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
-import { fetchCalendar, importHolidays, createEvent } from "../services/api/Api";
+import { Link } from "react-router-dom";
+import { allRouterLink } from "../router/AllRouterLinks";
+import {
+  fetchCalendar,
+  importHolidays,
+  createEvent,
+} from "../services/api/Api";
 
 function HolidayCalendar() {
   const [date, setDate] = useState(new Date());
@@ -17,7 +23,7 @@ function HolidayCalendar() {
     start_date: "",
     end_date: "",
     description: "",
-    category: ""
+    category: "",
   });
   const [isCreatingEvent, setIsCreatingEvent] = useState(false);
   const [userRole, setUserRole] = useState(null);
@@ -26,8 +32,6 @@ function HolidayCalendar() {
   const [jumpDate, setJumpDate] = useState("");
   const [isMonthYearModalOpen, setIsMonthYearModalOpen] = useState(false);
   const [isMonthLoading, setIsMonthLoading] = useState(false);
-
-
 
   // new states for loading & error
   const [loading, setLoading] = useState(true);
@@ -55,7 +59,6 @@ function HolidayCalendar() {
     }
   };
 
-
   useEffect(() => {
     getCalendar(true);
   }, []);
@@ -66,7 +69,6 @@ function HolidayCalendar() {
     }
   }, [year, month]);
 
-
   // Loader UI
   if (loading) {
     return (
@@ -76,7 +78,9 @@ function HolidayCalendar() {
           <div className="w-3 h-3 bgTheme rounded-full animate-bounce [animation-delay:-0.2s]"></div>
           <div className="w-3 h-3 bgTheme rounded-full animate-bounce [animation-delay:-0.4s]"></div>
         </div>
-        <p className="mt-2 text-gray-500 dark:text-gray-400 text-sm">Loading data...</p>
+        <p className="mt-2 text-gray-500 dark:text-gray-400 text-sm">
+          Loading data...
+        </p>
       </div>
     );
   }
@@ -117,7 +121,13 @@ function HolidayCalendar() {
       setModalMessage("Event created successfully!");
       setShowModal(true);
       getCalendar();
-      setNewEvent({ title: "", start_date: "", end_date: "", description: "", category: "" });
+      setNewEvent({
+        title: "",
+        start_date: "",
+        end_date: "",
+        description: "",
+        category: "",
+      });
       setIsEventDialogOpen(false);
     } catch (error) {
       setModalMessage(error.message || "Failed to create event");
@@ -134,14 +144,13 @@ function HolidayCalendar() {
   const parseAPIDate = (dateString) => {
     const date = new Date(dateString);
     return new Date(
-      Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
+      Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()),
     );
   };
 
-
   const isHoliday = (date) => {
     const compareDate = new Date(
-      Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
+      Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()),
     );
 
     const custom = calendarData?.custom_holidays?.some((holiday) => {
@@ -158,13 +167,12 @@ function HolidayCalendar() {
     return custom || school;
   };
 
-
   const hasEvent = (date) => {
     return calendarData?.events?.some((event) => {
       const startDate = parseAPIDate(event.start_date);
       const endDate = parseAPIDate(event.end_date);
       const compareDate = new Date(
-        Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
+        Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()),
       );
       return compareDate >= startDate && compareDate <= endDate;
     });
@@ -176,7 +184,7 @@ function HolidayCalendar() {
         const startDate = parseAPIDate(event.start_date);
         const endDate = parseAPIDate(event.end_date);
         const compareDate = new Date(
-          Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
+          Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()),
         );
         return compareDate >= startDate && compareDate <= endDate;
       }) || []
@@ -185,7 +193,7 @@ function HolidayCalendar() {
 
   const getHolidaysForDate = (date) => {
     const compareDate = new Date(
-      Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
+      Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()),
     );
 
     // custom holidays
@@ -205,7 +213,6 @@ function HolidayCalendar() {
 
     return [...custom, ...school];
   };
-
 
   const tileContent = ({ date, view }) => {
     if (view === "month") {
@@ -230,14 +237,18 @@ function HolidayCalendar() {
     if (view === "month") {
       let classes = [];
       if (isHoliday(date)) {
-        classes.push("bg-gradient-to-b from-amber-50 to-amber-100 dark:from-amber-900 dark:to-amber-800");
+        classes.push(
+          "bg-gradient-to-b from-amber-50 to-amber-100 dark:from-amber-900 dark:to-amber-800",
+        );
       }
       if (hasEvent(date)) {
-        classes.push("bg-gradient-to-b from-blue-50 to-blue-100 dark:from-blue-900 dark:to-blue-800");
+        classes.push(
+          "bg-gradient-to-b from-blue-50 to-blue-100 dark:from-blue-900 dark:to-blue-800",
+        );
       }
       if (date.toDateString() === new Date().toDateString()) {
         classes.push(
-          "relative after:absolute after:inset-0 after:border-2 after:border-blue-500 dark:after:border-blue-400 after:rounded-md"
+          "relative after:absolute after:inset-0 after:border-2 after:border-blue-500 dark:after:border-blue-400 after:rounded-md",
         );
       }
       return classes.join(" ");
@@ -363,7 +374,7 @@ function HolidayCalendar() {
                       value={importYear}
                       onChange={(e) =>
                         setImportYear(
-                          parseInt(e.target.value) || new Date().getFullYear()
+                          parseInt(e.target.value) || new Date().getFullYear(),
                         )
                       }
                       min="2000"
@@ -382,10 +393,11 @@ function HolidayCalendar() {
                     <button
                       onClick={handleImportHolidays}
                       disabled={isImporting}
-                      className={`px-4 py-2 rounded-md text-sm font-medium text-white w-30 ${isImporting
-                        ? "bgTheme cursor-not-allowed"
-                        : "bgTheme hover:bg-[#4e1bb3]"
-                        }`}
+                      className={`px-4 py-2 rounded-md text-sm font-medium text-white w-30 ${
+                        isImporting
+                          ? "bgTheme cursor-not-allowed"
+                          : "bgTheme hover:bg-[#4e1bb3]"
+                      }`}
                     >
                       {isImporting ? (
                         <i className="fa-solid fa-spinner fa-spin mr-2"></i>
@@ -461,7 +473,10 @@ function HolidayCalendar() {
                         min={new Date().toISOString().split("T")[0]}
                         value={newEvent.start_date}
                         onChange={(e) =>
-                          setNewEvent({ ...newEvent, start_date: e.target.value })
+                          setNewEvent({
+                            ...newEvent,
+                            start_date: e.target.value,
+                          })
                         }
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                       />
@@ -476,7 +491,10 @@ function HolidayCalendar() {
                       <input
                         type="date"
                         id="end-date"
-                        min={newEvent.start_date || new Date().toISOString().split("T")[0]}
+                        min={
+                          newEvent.start_date ||
+                          new Date().toISOString().split("T")[0]
+                        }
                         value={newEvent.end_date}
                         onChange={(e) =>
                           setNewEvent({ ...newEvent, end_date: e.target.value })
@@ -497,7 +515,10 @@ function HolidayCalendar() {
                       id="event-description"
                       value={newEvent.description}
                       onChange={(e) =>
-                        setNewEvent({ ...newEvent, description: e.target.value })
+                        setNewEvent({
+                          ...newEvent,
+                          description: e.target.value,
+                        })
                       }
                       rows={3}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
@@ -515,10 +536,11 @@ function HolidayCalendar() {
                     <button
                       onClick={handleCreateEvent}
                       disabled={isCreatingEvent}
-                      className={`px-4 py-2 rounded-md text-sm font-medium text-white w-30 ${isCreatingEvent
-                        ? "bgTheme cursor-not-allowed"
-                        : "bgTheme hover:bg-[#4410ad]"
-                        }`}
+                      className={`px-4 py-2 rounded-md text-sm font-medium text-white w-30 ${
+                        isCreatingEvent
+                          ? "bgTheme cursor-not-allowed"
+                          : "bgTheme hover:bg-[#4410ad]"
+                      }`}
                     >
                       {isCreatingEvent ? (
                         <i className="fa-solid fa-spinner fa-spin mr-2"></i>
@@ -552,13 +574,16 @@ function HolidayCalendar() {
                         onClick={(e) => {
                           e.stopPropagation();
                           const currentMonthYear = `${date.getFullYear()}-${String(
-                            date.getMonth() + 1
+                            date.getMonth() + 1,
                           ).padStart(2, "0")}`;
                           setJumpDate(currentMonthYear);
                           setIsMonthYearModalOpen(true);
                         }}
                       >
-                        {date.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
+                        {date.toLocaleDateString("en-US", {
+                          month: "long",
+                          year: "numeric",
+                        })}
                       </span>
                     )}
                     onActiveStartDateChange={({ activeStartDate, view }) => {
@@ -619,7 +644,9 @@ function HolidayCalendar() {
                         day: "numeric",
                       })}
                     </h2>
-                    <p className="text-gray-500 dark:text-gray-400">{date.getFullYear()}</p>
+                    <p className="text-gray-500 dark:text-gray-400">
+                      {date.getFullYear()}
+                    </p>
                   </div>
 
                   <div className="space-y-6">
@@ -659,7 +686,7 @@ function HolidayCalendar() {
                                 {holiday.type && (
                                   <span
                                     className={`text-xs px-2 py-1 rounded ${getHolidayTypeColor(
-                                      holiday.type
+                                      holiday.type,
                                     )}`}
                                   >
                                     {holiday.type}
@@ -712,7 +739,7 @@ function HolidayCalendar() {
                                   {event.category && (
                                     <span
                                       className={`text-xs px-2 py-1 rounded ${getEventCategoryColor(
-                                        event.category
+                                        event.category,
                                       )}`}
                                     >
                                       {event.category}
@@ -720,14 +747,14 @@ function HolidayCalendar() {
                                   )}
                                   <span className="text-xs bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 px-2 py-1 rounded">
                                     {parseAPIDate(
-                                      event.start_date
+                                      event.start_date,
                                     ).toLocaleDateString("en-US", {
                                       month: "short",
                                       day: "numeric",
                                     })}{" "}
                                     -{" "}
                                     {parseAPIDate(
-                                      event.end_date
+                                      event.end_date,
                                     ).toLocaleDateString("en-US", {
                                       month: "short",
                                       day: "numeric",
@@ -780,7 +807,28 @@ function HolidayCalendar() {
           </div>
 
           {(userRole === "office staff" || userRole === "director") && (
-            <div className="flex justify-end m-4 space-x-4">
+            <div className="flex flex-wrap justify-end m-4 gap-4">
+              {userRole === "director" && (
+                <Link
+                  to={allRouterLink.directorMarkHolidays}
+                  className="border border-[#5E35B1] textTheme bg-transparent hover:bg-[#5E35B1]/10 dark:hover:bg-[#5E35B1]/20 px-4 py-3 rounded-sm text-sm font-medium transition-colors flex items-center space-x-2"
+                >
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 6v6m0 0v6m0-6h6m-6 0H6"
+                    />
+                  </svg>{" "}
+                  <span>Create Holiday</span>
+                </Link>
+              )}
               <button
                 onClick={() => setIsEventDialogOpen(true)}
                 className="bgTheme text-white px-4 py-3 rounded-sm text-sm font-medium transition-colors shadow-sm flex items-center space-x-2"
@@ -822,7 +870,6 @@ function HolidayCalendar() {
             </div>
           )}
         </div>
-        
       </div>
 
       {/* Modal */}

@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useContext } from "react";
+import React, {
+  useState,
+  useEffect,
+  useContext,
+  useCallback,
+  useRef,
+} from "react";
 import { useForm } from "react-hook-form";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
@@ -15,17 +21,122 @@ import {
 import { constants } from "../../global/constants";
 import { AuthContext } from "../../context/AuthContext";
 
+/* -------------------------------------------------------------------------- */
+/*  Helpers                                                                   */
+/* -------------------------------------------------------------------------- */
+
+const PROFILE_URL = "/t/teacher/teacher_my_profile/";
+const GENDER_OPTIONS = ["Male", "Female", "Other"];
+
+const inputCls =
+  "input input-bordered w-full min-w-0 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200";
+
+// "m" / "Male" / "MALE" -> "Male" so the <select> always matches an option
+const normalizeGender = (g) => {
+  if (!g) return "";
+  const s = String(g).trim().toLowerCase();
+  if (s === "m" || s === "male") return "Male";
+  if (s === "f" || s === "female") return "Female";
+  if (s === "o" || s === "other") return "Other";
+  return "";
+};
+
+// Send gender back in the same style the API gave it to us
+// ("M" / "male" / "Male"), so we never break the backend's choices.
+const toBackendGender = (choice, original) => {
+  if (!choice) return "";
+  if (typeof original !== "string" || !original) return choice;
+  if (original.length === 1) {
+    return original === original.toUpperCase()
+      ? choice[0].toUpperCase()
+      : choice[0].toLowerCase();
+  }
+  if (original === original.toLowerCase()) return choice.toLowerCase();
+  return choice;
+};
+
+// API may return an absolute URL or a "/media/..." path
+const resolveImageUrl = (path, base) => {
+  if (!path) return "";
+  if (/^(https?:)?\/\//i.test(path) || path.startsWith("data:")) return path;
+  const cleanBase = (base || "").replace(/\/$/, "");
+  return `${cleanBase}${path.startsWith("/") ? "" : "/"}${path}`;
+};
+
+// Turn DRF validation errors / network errors into one readable line
+const formatApiError = (err) => {
+  const data = err?.response?.data;
+  if (!data) return err?.message || "Something went wrong. Please try again.";
+
+  if (typeof data === "string") {
+    return data.length > 200 || data.trim().startsWith("<")
+      ? `Server error (${err.response.status}). Please try again.`
+      : data;
+  }
+
+  if (typeof data === "object") {
+    if (typeof data.detail === "string") return data.detail;
+    const parts = Object.entries(data).map(([key, val]) => {
+      const msg = Array.isArray(val)
+        ? val.join(" ")
+        : typeof val === "object"
+          ? JSON.stringify(val)
+          : String(val);
+      return `${key.replace(/_/g, " ")}: ${msg}`;
+    });
+    if (parts.length) return parts.join(" | ");
+  }
+
+  return err?.message || "Something went wrong. Please try again.";
+};
+
+const Field = ({ label, error, children }) => (
+  <div className="flex min-w-0 flex-col gap-1">
+    <label className="text-sm font-semibold text-gray-500 dark:text-gray-300">
+      {label}
+    </label>
+    {children}
+    {error && <p className="mt-1 text-xs text-red-500">{error.message}</p>}
+  </div>
+);
+
+const ReadOnlyField = ({ icon, label, value }) => (
+  <div className="flex min-w-0 flex-col gap-1">
+    <label className="text-sm font-semibold text-gray-500 dark:text-gray-300">
+      <FontAwesomeIcon icon={icon} className="mr-2 h-4 w-4" />
+      {label}
+    </label>
+    <input
+      type="text"
+      value={value || "Not provided"}
+      className={inputCls}
+      readOnly
+    />
+  </div>
+);
+
+/* -------------------------------------------------------------------------- */
+/*  Page                                                                      */
+/* -------------------------------------------------------------------------- */
+
 const TeacherProfile = () => {
   const { axiosInstance } = useContext(AuthContext);
+  const BASE_URL = constants.baseUrl;
+  const fileInputRef = useRef(null);
+
+  const [profileData, setProfileData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [imagePreview, setImagePreview] = useState(null);
-  const [profileData, setProfileData] = useState(null);
-  const [removeImage, setRemoveImage] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [successMsg, setSuccessMsg] = useState("");
 
-  const BASE_URL = constants.baseUrl;
+  // Photo handling: a newly picked file, or an explicit "remove" flag
+  const [photoFile, setPhotoFile] = useState(null);
+  const [removeImage, setRemoveImage] = useState(false);
+  const [objectUrl, setObjectUrl] = useState(null);
 
   const {
     register,
@@ -34,106 +145,181 @@ const TeacherProfile = () => {
     formState: { errors },
   } = useForm({ mode: "onChange" });
 
-  useEffect(() => {
-    const fetchTeacherData = async () => {
+  /* ------------------------------- load data ------------------------------- */
+
+  const loadProfile = useCallback(
+    async (showSpinner = true) => {
       try {
-        setLoading(true);
-        const response = await axiosInstance.get(
-          `/t/teacher/teacher_my_profile/`
-        );
+        if (showSpinner) setLoading(true);
+        const response = await axiosInstance.get(PROFILE_URL);
         setProfileData(response.data);
-        setLoading(false);
+        setLoadError(null);
       } catch (err) {
         console.error("Error fetching teacher data:", err);
-        setError(err.response?.data?.detail || err.message);
-        setLoading(false);
+        // A failed background refresh must not blank the whole page
+        if (showSpinner) setLoadError(formatApiError(err));
+      } finally {
+        if (showSpinner) setLoading(false);
       }
-    };
+    },
+    [axiosInstance],
+  );
 
-    fetchTeacherData();
-  }, [axiosInstance]);
+  useEffect(() => {
+    loadProfile(true);
+  }, [loadProfile]);
 
-  const onSubmit = async (data) => {
-    try {
-      const formData = new FormData();
-      formData.append("first_name", data.first_name);
-      formData.append("last_name", data.last_name);
-      formData.append("email", data.email);
-      formData.append("phone_no", data.phone_no);
-      formData.append("gender", data.gender);
-      formData.append("adhaar_no", data.adhaar_no);
-      formData.append("pan_no", data.pan_no);
-      formData.append("qualification", data.qualification);
-      formData.append("middle_name", data.middle_name || "");
-
-      if (removeImage) {
-        formData.append("user_profile", "");
-      } else if (imagePreview && typeof imagePreview !== "string") {
-        formData.append("user_profile", imagePreview);
-      }
-      if (imagePreview && typeof imagePreview !== "string") {
-        formData.append("user_profile", imagePreview);
-      }
-
-      const response = await axiosInstance.put(
-        `/t/teacher/teacher_my_profile/`,
-        formData,
-        {
-          headers: {
-            "Content-Type": "multipart/form-data",
-          },
-        }
-      );
-
-      setProfileData(response.data);
-      setIsDialogOpen(false);
-      setImagePreview(null);
-      window.location.reload();
-    } catch (err) {
-      console.error("Error updating teacher data:", err);
-      setError(err.message);
+  // Object URL for the newly picked photo (created once, cleaned up properly)
+  useEffect(() => {
+    if (!photoFile) {
+      setObjectUrl(null);
+      return undefined;
     }
+    const url = URL.createObjectURL(photoFile);
+    setObjectUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [photoFile]);
+
+  // Auto-hide the success notice
+  useEffect(() => {
+    if (!successMsg) return undefined;
+    const t = setTimeout(() => setSuccessMsg(""), 4000);
+    return () => clearTimeout(t);
+  }, [successMsg]);
+
+  const existingPhotoUrl = resolveImageUrl(profileData?.user_profile, BASE_URL);
+  const previewSrc = removeImage ? "" : objectUrl || existingPhotoUrl;
+
+  /* -------------------------------- handlers ------------------------------- */
+
+  const openDialog = () => {
+    reset({
+      first_name: profileData?.first_name ?? "",
+      middle_name: profileData?.middle_name ?? "",
+      last_name: profileData?.last_name ?? "",
+      gender: normalizeGender(profileData?.gender),
+      email: profileData?.email ?? "",
+      phone_no: profileData?.phone_no ?? "",
+      adhaar_no: profileData?.adhaar_no ?? "",
+      pan_no: profileData?.pan_no ?? "",
+      qualification: profileData?.qualification ?? "",
+    });
+    setPhotoFile(null);
+    setRemoveImage(false);
+    setSubmitError("");
+    setIsDialogOpen(true);
   };
 
-  const handleEditClick = () => {
-    reset(profileData);
-    setIsDialogOpen(true);
-    if (profileData?.user_profile) {
-      setImagePreview(`${BASE_URL}${profileData.user_profile}`);
+  const closeDialog = () => {
+    setIsDialogOpen(false);
+    setPhotoFile(null);
+    setRemoveImage(false);
+    setSubmitError("");
+  };
+
+  const handlePhotoChange = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setPhotoFile(file);
+      setRemoveImage(false); // picking a new photo cancels a previous "remove"
     }
+    e.target.value = ""; // allow re-picking the same file
   };
 
   const handleRemoveImage = () => {
-    setImagePreview(null);
+    setPhotoFile(null);
     setRemoveImage(true);
   };
 
+  const onSubmit = async (data) => {
+    setSaving(true);
+    setSubmitError("");
+
+    try {
+      const formData = new FormData();
+
+      // Never send null / undefined (FormData would turn them into the
+      // strings "null" / "undefined", which the backend rejects)
+      const append = (key, value) => {
+        if (value === undefined || value === null) return;
+        formData.append(key, typeof value === "string" ? value.trim() : value);
+      };
+
+      append("first_name", data.first_name);
+      append("middle_name", data.middle_name ?? "");
+      append("last_name", data.last_name);
+      append("email", data.email);
+      append("phone_no", data.phone_no);
+      append("gender", toBackendGender(data.gender, profileData?.gender));
+      append("adhaar_no", data.adhaar_no);
+      append("pan_no", data.pan_no);
+      append("qualification", data.qualification);
+
+      // Photo is appended exactly once
+      if (photoFile) {
+        formData.append("user_profile", photoFile);
+      } else if (removeImage) {
+        formData.append("user_profile", "");
+      }
+
+      // Don't set Content-Type by hand: the browser adds the multipart boundary
+      await axiosInstance.put(PROFILE_URL, formData);
+
+      const photoChanged = Boolean(photoFile) || removeImage;
+      closeDialog();
+      await loadProfile(false);
+
+      if (photoChanged) {
+        // refresh the header avatar too
+        window.location.reload();
+      } else {
+        setSuccessMsg("Profile updated successfully.");
+      }
+    } catch (err) {
+      console.error("Error updating teacher data:", err);
+      // Keep the form open and show what went wrong
+      setSubmitError(formatApiError(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /* --------------------------------- states -------------------------------- */
+
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen">
+      <div className="flex min-h-screen flex-col items-center justify-center">
         <div className="flex space-x-2">
-          <div className="w-3 h-3 bgTheme rounded-full animate-bounce"></div>
-          <div className="w-3 h-3 bgTheme rounded-full animate-bounce [animation-delay:-0.2s]"></div>
-          <div className="w-3 h-3 bgTheme rounded-full animate-bounce [animation-delay:-0.4s]"></div>
+          <div className="bgTheme h-3 w-3 animate-bounce rounded-full"></div>
+          <div className="bgTheme h-3 w-3 animate-bounce rounded-full [animation-delay:-0.2s]"></div>
+          <div className="bgTheme h-3 w-3 animate-bounce rounded-full [animation-delay:-0.4s]"></div>
         </div>
-        <p className="mt-2 text-gray-500 text-sm">Loading data...</p>
+        <p className="mt-2 text-sm text-gray-500">Loading data...</p>
       </div>
     );
   }
 
-  if (error) {
+  if (loadError) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen text-center p-6">
-        <i className="fa-solid fa-triangle-exclamation text-5xl text-red-400 mb-4"></i>
-        <p className="text-lg text-red-400 font-medium">Failed to load data, Try Again</p>
+      <div className="flex min-h-screen flex-col items-center justify-center p-6 text-center">
+        <i className="fa-solid fa-triangle-exclamation mb-4 text-5xl text-red-400"></i>
+        <p className="text-lg font-medium text-red-400">
+          Failed to load data, Try Again
+        </p>
+        <button
+          type="button"
+          onClick={() => loadProfile(true)}
+          className="btn bgTheme mt-4 text-white"
+        >
+          Retry
+        </button>
       </div>
     );
   }
-
 
   if (!profileData) {
     return (
-      <div className="max-w-7xl mx-auto bg-white rounded-xl shadow-md shadow-top-bottom overflow-hidden px-4 sm:px-6 lg:px-8 py-8 m-2.5">
+      <div className="mx-auto m-3 max-w-7xl overflow-hidden rounded-xl bg-white px-4 py-8 shadow-md dark:bg-gray-800 sm:px-6 lg:px-8">
         <div className="text-center text-gray-500">
           <p>No profile data available</p>
         </div>
@@ -141,21 +327,18 @@ const TeacherProfile = () => {
     );
   }
 
+  /* --------------------------------- render -------------------------------- */
+
   return (
-    <div className="p-6 bg-gray-100 dark:bg-gray-900 min-h-screen">
-      <div className="max-w-7xl mx-auto bg-white dark:bg-gray-800 rounded-xl shadow-md shadow-top-bottom overflow-hidden px-4 sm:px-6 lg:px-8 py-8 m-2.5">
+    <div className="min-h-screen bg-gray-100 p-3 pb-24 dark:bg-gray-900 sm:p-6 md:pb-10">
+      <div className="mx-auto w-full max-w-7xl overflow-hidden rounded-xl bg-white px-4 py-6 shadow-md dark:bg-gray-800 sm:px-6 sm:py-8 lg:px-8">
         {/* Header with image and titles */}
-        <div className="flex flex-col md:flex-row items-center md:items-start gap-4 mb-8">
-          {/* Profile Image */}
+        <div className="mb-8 flex flex-col items-center gap-4 text-center sm:flex-row sm:items-center sm:text-left">
           <div className="flex-shrink-0">
-            <div className="h-20 w-20 sm:h-24 sm:w-24 rounded-full bg-gray-200 overflow-hidden flex items-center justify-center">
-              {profileData.user_profile ? (
+            <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+              {existingPhotoUrl ? (
                 <img
-                  src={
-                    profileData.user_profile
-                      ? `${BASE_URL}${profileData.user_profile}`
-                      : "https://img.daisyui.com/images/stock/photo-1534528741775-53994a69daeb.webp"
-                  }
+                  src={existingPhotoUrl}
                   alt="Profile"
                   className="h-full w-full object-cover"
                 />
@@ -168,508 +351,350 @@ const TeacherProfile = () => {
             </div>
           </div>
 
-          {/* Title and Subtitle */}
-          <div className="text-center md:text-left">
-            <h1 className="text-xl sm:text-2xl font-bold textTheme uppercase">
+          <div className="min-w-0">
+            <h1 className="textTheme text-xl font-bold uppercase sm:text-2xl">
               Teacher Profile
             </h1>
-            <p className="text-sm sm:text-base text-gray-600 dark:text-gray-300">
+            <p className="text-sm text-gray-600 dark:text-gray-300 sm:text-base">
               Manage your account information and settings
             </p>
           </div>
         </div>
 
-        <div className="border-t border-gray-200 pt-6">
-          {/* Grid container */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {successMsg && (
+          <div
+            role="status"
+            className="mb-6 rounded-md border border-green-300 bg-green-50 px-4 py-3 text-sm text-green-700 dark:border-green-700 dark:bg-green-900/30 dark:text-green-300"
+          >
+            {successMsg}
+          </div>
+        )}
+
+        <div className="border-t border-gray-200 pt-6 dark:border-gray-700">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
             {/* Column 1 */}
             <div className="space-y-6">
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-semibold text-gray-500">
-                  <FontAwesomeIcon icon={faUser} className="w-4 h-4 mr-2" />
-                  First Name
-                </label>
-                <input
-                  type="text"
-                  value={profileData.first_name || "Not provided"}
-                  className="input input-bordered w-full text-sm"
-                  readOnly
-                />
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-semibold text-gray-500">
-                  <FontAwesomeIcon icon={faSignature} className="w-4 h-4 mr-2" />
-                  Middle Name
-                </label>
-                <input
-                  type="text"
-                  value={profileData.middle_name || "Not provided"}
-                  className="input input-bordered w-full text-sm"
-                  readOnly
-                />
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-semibold text-gray-500">
-                  <FontAwesomeIcon icon={faSignature} className="w-4 h-4 mr-2" />
-                  Last Name
-                </label>
-                <input
-                  type="text"
-                  value={profileData.last_name || "Not provided"}
-                  className="input input-bordered w-full text-sm"
-                  readOnly
-                />
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-semibold text-gray-500">
-                  <FontAwesomeIcon icon={faVenusMars} className="w-4 h-4 mr-2" />
-                  Gender
-                </label>
-                <input
-                  type="text"
-                  value={profileData.gender || "Not provided"}
-                  className="input input-bordered w-full text-sm"
-                  readOnly
-                />
-              </div>
-
-
+              <ReadOnlyField
+                icon={faUser}
+                label="First Name"
+                value={profileData.first_name}
+              />
+              <ReadOnlyField
+                icon={faSignature}
+                label="Middle Name"
+                value={profileData.middle_name}
+              />
+              <ReadOnlyField
+                icon={faSignature}
+                label="Last Name"
+                value={profileData.last_name}
+              />
+              <ReadOnlyField
+                icon={faVenusMars}
+                label="Gender"
+                value={profileData.gender}
+              />
             </div>
 
             {/* Column 2 */}
             <div className="space-y-6">
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-semibold text-gray-500">
-                  <FontAwesomeIcon icon={faPhone} className="w-4 h-4 mr-2" />
-                  Phone Number
-                </label>
-                <input
-                  type="text"
-                  value={profileData.phone_no || "Not provided"}
-                  className="input input-bordered w-full text-sm"
-                  readOnly
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-semibold text-gray-500">
-                  <FontAwesomeIcon icon={faEnvelope} className="w-4 h-4 mr-2" />
-                  Email
-                </label>
-                <input
-                  type="text"
-                  value={profileData.email || "Not provided"}
-                  className="input input-bordered w-full text-sm"
-                  readOnly
-                />
-              </div>
-
-
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-semibold text-gray-500">
-                  <FontAwesomeIcon icon={faIdCard} className="w-4 h-4 mr-2" />
-                  Aadhaar Number
-                </label>
-                <input
-                  type="text"
-                  value={profileData.adhaar_no || "Not provided"}
-                  className="input input-bordered w-full text-sm"
-                  readOnly
-                />
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-semibold text-gray-500">
-                  <FontAwesomeIcon icon={faIdCard} className="w-4 h-4 mr-2" />
-                  PAN Number
-                </label>
-                <input
-                  type="text"
-                  value={profileData.pan_no || "Not provided"}
-                  className="input input-bordered w-full text-sm"
-                  readOnly
-                />
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-semibold text-gray-500">
-                  <FontAwesomeIcon
-                    icon={faGraduationCap}
-                    className="w-4 h-4 mr-2"
-                  />
-                  Qualification
-                </label>
-                <input
-                  type="text"
-                  value={profileData.qualification || "Not provided"}
-                  className="input input-bordered w-full text-sm"
-                  readOnly
-                />
-              </div>
-
+              <ReadOnlyField
+                icon={faPhone}
+                label="Phone Number"
+                value={profileData.phone_no}
+              />
+              <ReadOnlyField
+                icon={faEnvelope}
+                label="Email"
+                value={profileData.email}
+              />
+              <ReadOnlyField
+                icon={faIdCard}
+                label="Aadhaar Number"
+                value={profileData.adhaar_no}
+              />
+              <ReadOnlyField
+                icon={faIdCard}
+                label="PAN Number"
+                value={profileData.pan_no}
+              />
+              <ReadOnlyField
+                icon={faGraduationCap}
+                label="Qualification"
+                value={profileData.qualification}
+              />
               {profileData.date_joined && (
-                <div className="flex flex-col gap-1">
-                  <label className="text-sm font-semibold text-gray-500">
-                    <FontAwesomeIcon
-                      icon={faCalendarDay}
-                      className="w-4 h-4 mr-2"
-                    />
-                    Date Joined
-                  </label>
-                  <input
-                    type="text"
-                    value={profileData.date_joined}
-                    className="input input-bordered w-full text-sm"
-                    readOnly
-                  />
-                </div>
+                <ReadOnlyField
+                  icon={faCalendarDay}
+                  label="Date Joined"
+                  value={profileData.date_joined}
+                />
               )}
             </div>
           </div>
 
-          {/* Buttons section */}
-          <div className="flex justify-end gap-4 mt-8">
-            <button className="flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
-              Cancel
-            </button>
+          <div className="mt-8 flex justify-end">
             <button
-              onClick={handleEditClick}
-              className="btn bgTheme text-white"
+              type="button"
+              onClick={openDialog}
+              className="btn bgTheme w-full text-white sm:w-auto"
             >
               <i className="fa-solid fa-pen-to-square"></i> Update
             </button>
           </div>
         </div>
+      </div>
 
-        {/* Dialog Box */}
-        {isDialogOpen && (
-          <div className="fixed inset-0  bg-opacity-50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
-              <div className="p-6">
-                <h2 className="text-xl font-bold text-[#167bff] dark:text-blue-400 mb-4">
+      {/* Dialog Box */}
+      {isDialogOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="update-profile-title"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 backdrop-blur-sm sm:items-center sm:p-4"
+        >
+          <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-t-2xl bg-white shadow-2xl dark:bg-gray-800 sm:rounded-lg">
+            <form onSubmit={handleSubmit(onSubmit)} noValidate>
+              <div className="p-4 sm:p-6">
+                <h2
+                  id="update-profile-title"
+                  className="mb-4 text-xl font-bold text-[#167bff] dark:text-blue-400"
+                >
                   Update Teacher Profile
                 </h2>
 
-                <form onSubmit={handleSubmit(onSubmit)}>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    {/* Column 1 - Profile Image */}
-                    <div className="space-y-4">
-                      <h3 className="text-md font-semibold text-gray-700 dark:text-gray-200 border-b pb-2">
-                        Profile Image
-                      </h3>
+                {submitError && (
+                  <div
+                    role="alert"
+                    className="mb-4 break-words rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-300"
+                  >
+                    {submitError}
+                  </div>
+                )}
 
-                      <div className="flex flex-col items-center space-y-4">
-                        <div className="relative group">
-                          <div className="h-32 w-32 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden shadow-md border-2 border-gray-300 dark:border-gray-600 hover:border-blue-400 transition-all duration-200">
-                            {imagePreview ? (
-                              typeof imagePreview === "string" ? (
-                                <img
-                                  src={imagePreview}
-                                  alt="Profile Preview"
-                                  className="h-full w-full object-cover"
-                                />
-                              ) : (
-                                <img
-                                  src={URL.createObjectURL(imagePreview)}
-                                  alt="Profile Preview"
-                                  className="h-full w-full object-cover"
-                                />
-                              )
-                            ) : (
-                              <div className="h-full w-full flex items-center justify-center text-gray-400 dark:text-gray-300 bg-gradient-to-br from-gray-100 dark:from-gray-700 to-gray-200 dark:to-gray-600">
-                                <FontAwesomeIcon
-                                  icon={faUser}
-                                  size="3x"
-                                  className="opacity-70"
-                                />
-                              </div>
-                            )}
-                          </div>
-                          <label className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 cursor-pointer">
-                            <div className="bg-black bg-opacity-50 rounded-full p-2">
-                              <FontAwesomeIcon
-                                icon={faCamera}
-                                className="text-white text-lg"
-                              />
-                            </div>
-                            <input
-                              className="hidden"
-                              type="file"
-                              accept="image/*"
-                              onChange={(e) => {
-                                if (e.target.files && e.target.files[0]) {
-                                  setImagePreview(e.target.files[0]);
-                                }
-                              }}
+                <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+                  {/* Column 1 - Profile Image */}
+                  <div className="space-y-4 md:col-span-2 lg:col-span-1">
+                    <h3 className="text-md border-b pb-2 font-semibold text-gray-700 dark:border-gray-700 dark:text-gray-200">
+                      Profile Image
+                    </h3>
+
+                    <div className="flex flex-col items-center space-y-4">
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        aria-label="Choose profile photo"
+                        className="group relative h-32 w-32 overflow-hidden rounded-full border-2 border-gray-300 bg-gray-100 shadow-md transition-all duration-200 hover:border-blue-400 dark:border-gray-600 dark:bg-gray-700"
+                      >
+                        {previewSrc ? (
+                          <img
+                            src={previewSrc}
+                            alt="Profile Preview"
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <span className="flex h-full w-full items-center justify-center bg-gradient-to-br from-gray-100 to-gray-200 text-gray-400 dark:from-gray-700 dark:to-gray-600 dark:text-gray-300">
+                            <FontAwesomeIcon
+                              icon={faUser}
+                              size="3x"
+                              className="opacity-70"
                             />
-                          </label>
-                        </div>
-
-                        <div className="flex gap-2">
-                          <label className="btn bgTheme text-white">
-                            <FontAwesomeIcon icon={faCamera} className="mr-2" />
-                            Photo
-                            <input
-                              className="hidden"
-                              type="file"
-                              accept="image/*"
-                              onChange={(e) => {
-                                if (e.target.files && e.target.files[0]) {
-                                  setImagePreview(e.target.files[0]);
-                                }
-                              }}
-                            />
-                          </label>
-                          {imagePreview && (
-                            <button
-                              type="button"
-                              onClick={handleRemoveImage}
-                              className="inline-flex items-center px-3 py-1 border border-red-300 dark:border-red-600 rounded-md shadow-sm text-sm font-medium text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900 hover:bg-red-100 dark:hover:bg-red-800"
-                            >
-                              <span className="mr-2">X</span>
-                              Remove
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Column 2 - Personal Info */}
-                    <div className="space-y-4">
-                      <h3 className="text-md font-semibold text-gray-700 dark:text-gray-200 border-b pb-2">
-                        Personal Information
-                      </h3>
-
-                      {/* First Name */}
-                      <div className="flex flex-col gap-1">
-                        <label className="text-sm font-semibold text-gray-500 dark:text-gray-300">
-                          First Name
-                        </label>
-                        <input
-                          type="text"
-                          {...register("first_name", {
-                            required: "First name is required",
-                          })}
-                          className="input input-bordered w-full text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
-                        />
-                        {errors.first_name && (
-                          <p className="text-red-500 text-xs mt-1">
-                            {errors.first_name.message}
-                          </p>
+                          </span>
                         )}
-                      </div>
+                        <span className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+                          <FontAwesomeIcon
+                            icon={faCamera}
+                            className="text-lg text-white"
+                          />
+                        </span>
+                      </button>
 
-                      {/* Middle Name */}
-                      <div className="flex flex-col gap-1">
-                        <label className="text-sm font-semibold text-gray-500 dark:text-gray-300">
-                          Middle Name
-                        </label>
-                        <input
-                          type="text"
-                          {...register("middle_name")}
-                          className="input input-bordered w-full text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
-                        />
-                      </div>
+                      <input
+                        ref={fileInputRef}
+                        className="hidden"
+                        type="file"
+                        accept="image/*"
+                        onChange={handlePhotoChange}
+                      />
 
-                      {/* Last Name */}
-                      <div className="flex flex-col gap-1">
-                        <label className="text-sm font-semibold text-gray-500 dark:text-gray-300">
-                          Last Name
-                        </label>
-                        <input
-                          type="text"
-                          {...register("last_name", {
-                            required: "Last name is required",
-                          })}
-                          className="input input-bordered w-full text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
-                        />
-                        {errors.last_name && (
-                          <p className="text-red-500 text-xs mt-1">
-                            {errors.last_name.message}
-                          </p>
-                        )}
-                      </div>
-
-                      {/* Gender */}
-                      <div className="flex flex-col gap-1">
-                        <label className="text-sm font-semibold text-gray-500 dark:text-gray-300">
-                          Gender
-                        </label>
-                        <select
-                          {...register("gender", {
-                            required: "Gender is required",
-                          })}
-                          className="select select-bordered w-full text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
+                      <div className="flex flex-wrap justify-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="btn bgTheme text-white"
                         >
-                          <option value="">Select Gender</option>
-                          <option value="Male">Male</option>
-                          <option value="Female">Female</option>
-                          <option value="Other">Other</option>
-                        </select>
-                        {errors.gender && (
-                          <p className="text-red-500 text-xs mt-1">
-                            {errors.gender.message}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Column 3 - Contact & Professional Info */}
-                    <div className="space-y-4">
-                      <h3 className="text-md font-semibold text-gray-700 dark:text-gray-200 border-b pb-2">
-                        Contact Information
-                      </h3>
-
-                      {/* Email */}
-                      <div className="flex flex-col gap-1">
-                        <label className="text-sm font-semibold text-gray-500 dark:text-gray-300">
-                          Email
-                        </label>
-                        <input
-                          type="email"
-                          {...register("email", {
-                            required: "Email is required",
-                            pattern: {
-                              value: /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i,
-                              message: "Invalid email address",
-                            },
-                          })}
-                          className="input input-bordered w-full text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
-                        />
-                        {errors.email && (
-                          <p className="text-red-500 text-xs mt-1">
-                            {errors.email.message}
-                          </p>
-                        )}
-                      </div>
-
-                      {/* Phone */}
-                      <div className="flex flex-col gap-1">
-                        <label className="text-sm font-semibold text-gray-500 dark:text-gray-300">
-                          Phone Number
-                        </label>
-                        <input
-                          type="text"
-                          {...register("phone_no", {
-                            required: "Phone number is required",
-                            pattern: {
-                              value: /^[0-9]*$/,
-                              message: "Only numbers are allowed",
-                            },
-                          })}
-                          onInput={(e) => {
-                            e.target.value = e.target.value.replace(/[^0-9]/g, "");
-                            if (e.target.value.length > 10) {
-                              e.target.value = e.target.value.slice(0, 10);
-                            }
-                          }}
-                          className="input input-bordered w-full text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
-                        />
-                        {errors.phone_no && (
-                          <p className="text-red-500 text-xs mt-1">
-                            {errors.phone_no.message}
-                          </p>
-                        )}
-                      </div>
-
-                      {/* Professional Information */}
-                      <h3 className="text-md font-semibold text-gray-700 dark:text-gray-200 border-b pb-2 mt-4">
-                        Professional Information
-                      </h3>
-
-                      {/* Qualification */}
-                      <div className="flex flex-col gap-1">
-                        <label className="text-sm font-semibold text-gray-500 dark:text-gray-300">
-                          Qualification
-                        </label>
-                        <input
-                          type="text"
-                          {...register("qualification", {
-                            required: "Qualification is required",
-                          })}
-                          className="input input-bordered w-full text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
-                          // disabled={true}
-                        />
-                        {errors.qualification && (
-                          <p className="text-red-500 text-xs mt-1">
-                            {errors.qualification.message}
-                          </p>
-                        )}
-                      </div>
-
-                      {/* Aadhaar */}
-                      <div className="flex flex-col gap-1">
-                        <label className="text-sm font-semibold text-gray-500 dark:text-gray-300">
-                          Aadhaar Number
-                        </label>
-                        <input
-                          type="text"
-                          {...register("adhaar_no", {
-                            required: "Aadhaar number is required",
-                          })}
-                          className="input input-bordered w-full text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
-                          // disabled={true}
-                        />
-                        {errors.adhaar_no && (
-                          <p className="text-red-500 text-xs mt-1">
-                            {errors.adhaar_no.message}
-                          </p>
-                        )}
-                      </div>
-
-                      {/* PAN */}
-                      <div className="flex flex-col gap-1">
-                        <label className="text-sm font-semibold text-gray-500 dark:text-gray-300">
-                          PAN Number
-                        </label>
-                        <input
-                          type="text"
-                          {...register("pan_no", {
-                            required: "PAN number is required",
-                          })}
-                          className="input input-bordered w-full text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
-                          // disabled={true}
-                        />
-                        {errors.pan_no && (
-                          <p className="text-red-500 text-xs mt-1">
-                            {errors.pan_no.message}
-                          </p>
+                          <FontAwesomeIcon icon={faCamera} className="mr-2" />
+                          Photo
+                        </button>
+                        {previewSrc && (
+                          <button
+                            type="button"
+                            onClick={handleRemoveImage}
+                            className="inline-flex items-center rounded-md border border-red-300 bg-red-50 px-3 py-1 text-sm font-medium text-red-700 shadow-sm hover:bg-red-100 dark:border-red-600 dark:bg-red-900 dark:text-red-300 dark:hover:bg-red-800"
+                          >
+                            <span className="mr-2">X</span>
+                            Remove
+                          </button>
                         )}
                       </div>
                     </div>
                   </div>
 
-                  {/* Buttons */}
-                  <div className="flex justify-end gap-4 mt-6">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsDialogOpen(false);
-                        setImagePreview(null);
-                      }}
-                      className="flex items-center px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="btn bgTheme text-white"
-                    >
-                      Save Changes
-                    </button>
+                  {/* Column 2 - Personal Info */}
+                  <div className="space-y-4">
+                    <h3 className="text-md border-b pb-2 font-semibold text-gray-700 dark:border-gray-700 dark:text-gray-200">
+                      Personal Information
+                    </h3>
+
+                    <Field label="First Name" error={errors.first_name}>
+                      <input
+                        type="text"
+                        {...register("first_name", {
+                          required: "First name is required",
+                        })}
+                        className={inputCls}
+                      />
+                    </Field>
+
+                    <Field label="Middle Name" error={errors.middle_name}>
+                      <input
+                        type="text"
+                        {...register("middle_name")}
+                        className={inputCls}
+                      />
+                    </Field>
+
+                    <Field label="Last Name" error={errors.last_name}>
+                      <input
+                        type="text"
+                        {...register("last_name", {
+                          required: "Last name is required",
+                        })}
+                        className={inputCls}
+                      />
+                    </Field>
+
+                    <Field label="Gender" error={errors.gender}>
+                      <select
+                        {...register("gender", {
+                          required: "Gender is required",
+                        })}
+                        className="select select-bordered w-full min-w-0 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
+                      >
+                        <option value="">Select Gender</option>
+                        {GENDER_OPTIONS.map((g) => (
+                          <option key={g} value={g}>
+                            {g}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
                   </div>
-                </form>
+
+                  {/* Column 3 - Contact & Professional Info */}
+                  <div className="space-y-4">
+                    <h3 className="text-md border-b pb-2 font-semibold text-gray-700 dark:border-gray-700 dark:text-gray-200">
+                      Contact Information
+                    </h3>
+
+                    <Field label="Email" error={errors.email}>
+                      <input
+                        type="email"
+                        {...register("email", {
+                          required: "Email is required",
+                          pattern: {
+                            value: /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i,
+                            message: "Invalid email address",
+                          },
+                        })}
+                        className={inputCls}
+                      />
+                    </Field>
+
+                    <Field label="Phone Number" error={errors.phone_no}>
+                      <input
+                        type="tel"
+                        inputMode="numeric"
+                        maxLength={10}
+                        {...register("phone_no", {
+                          required: "Phone number is required",
+                          pattern: {
+                            value: /^[0-9]{10}$/,
+                            message: "Enter a 10 digit phone number",
+                          },
+                        })}
+                        // runs before react-hook-form reads the value, so the
+                        // stored value always matches what the user sees
+                        onInput={(e) => {
+                          e.target.value = e.target.value
+                            .replace(/[^0-9]/g, "")
+                            .slice(0, 10);
+                        }}
+                        className={inputCls}
+                      />
+                    </Field>
+
+                    <h3 className="text-md mt-4 border-b pb-2 font-semibold text-gray-700 dark:border-gray-700 dark:text-gray-200">
+                      Professional Information
+                    </h3>
+
+                    <Field label="Qualification" error={errors.qualification}>
+                      <input
+                        type="text"
+                        {...register("qualification", {
+                          required: "Qualification is required",
+                        })}
+                        className={inputCls}
+                      />
+                    </Field>
+
+                    <Field label="Aadhaar Number" error={errors.adhaar_no}>
+                      <input
+                        type="text"
+                        {...register("adhaar_no", {
+                          required: "Aadhaar number is required",
+                        })}
+                        className={inputCls}
+                      />
+                    </Field>
+
+                    <Field label="PAN Number" error={errors.pan_no}>
+                      <input
+                        type="text"
+                        {...register("pan_no", {
+                          required: "PAN number is required",
+                        })}
+                        className={inputCls}
+                      />
+                    </Field>
+                  </div>
+                </div>
               </div>
-            </div>
+
+              {/* Buttons - stay visible at the bottom on small screens */}
+              <div className="sticky bottom-0 flex flex-col-reverse gap-3 border-t border-gray-200 bg-white px-4 py-4 dark:border-gray-700 dark:bg-gray-800 sm:flex-row sm:justify-end sm:px-6">
+                <button
+                  type="button"
+                  onClick={closeDialog}
+                  disabled={saving}
+                  className="flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="btn bgTheme text-white disabled:opacity-60"
+                >
+                  {saving ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            </form>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 };
 
 export default TeacherProfile;
-
-

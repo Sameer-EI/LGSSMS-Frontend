@@ -3,7 +3,6 @@ import { useForm, useFieldArray } from "react-hook-form";
 import {
   fetchYearLevels,
   fetchSchoolYear,
-  fetchSubjects,
   fetchTerms,
 } from "../../services/api/Api";
 import { useNavigate } from "react-router-dom";
@@ -15,6 +14,7 @@ const ExamSchedule = () => {
   const [schoolYear, setSchoolYear] = useState([]);
   const [examType, setExamType] = useState([]);
   const [subjects, setSubjects] = useState([]);
+  const [subjectsLoading, setSubjectsLoading] = useState(false);
   const [terms, setTerms] = useState([]); // Added terms state
   const [showAlert, setShowAlert] = useState(false);
   const [alertMessage, setAlertMessage] = useState("");
@@ -31,6 +31,8 @@ const ExamSchedule = () => {
     formState: { errors, isSubmitting },
     reset,
     watch,
+    setValue,
+    getValues,
   } = useForm({
     defaultValues: {
       class_name: "",
@@ -86,15 +88,6 @@ const ExamSchedule = () => {
     }
   };
 
-  const getSubjects = async () => {
-    try {
-      const obj = await fetchSubjects();
-      setSubjects(obj);
-    } catch (err) {
-      console.log("Failed to load subjects. Please try again." + err);
-    }
-  };
-
   const getTerms = async () => {
     try {
       const obj = await fetchTerms();
@@ -108,9 +101,51 @@ const ExamSchedule = () => {
     getClassName();
     getSchool_year();
     getExamType();
-    getSubjects();
     getTerms();
   }, []);
+
+  // Subjects depend on the selected class:
+  // GET /d/subject/?core_subject=true&year_level=<class id>
+  const selectedClassId = watch("class_name");
+
+  useEffect(() => {
+    // Class changed -> previously chosen subjects may not belong to it
+    (getValues("papers") || []).forEach((_, i) =>
+      setValue(`papers.${i}.subject_id`, ""),
+    );
+
+    if (!selectedClassId) {
+      setSubjects([]);
+      return;
+    }
+
+    let cancelled = false; // ignore stale responses if the class changes quickly
+    setSubjectsLoading(true);
+    setSubjects([]);
+
+    axiosInstance
+      .get("/d/subject/", {
+        params: { core_subject: true, year_level: selectedClassId },
+      })
+      .then((res) => {
+        if (cancelled) return;
+        const data = res.data;
+        setSubjects(Array.isArray(data) ? data : data?.results || []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.log("Failed to load subjects. Please try again." + err);
+        setSubjects([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSubjectsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClassId]);
 
   const { fields, append, remove } = useFieldArray({
     control,
@@ -322,11 +357,20 @@ const ExamSchedule = () => {
                     className={`select select-bordered w-full ${
                       errors.papers?.[index]?.subject_id ? "select-error" : ""
                     }`}
+                    disabled={!selectedClassId || subjectsLoading}
                     {...register(`papers.${index}.subject_id`, {
                       required: "Subject is required",
                     })}
                   >
-                    <option value="">Select Subject</option>
+                    <option value="">
+                      {!selectedClassId
+                        ? "Select class first"
+                        : subjectsLoading
+                          ? "Loading subjects..."
+                          : subjects.length === 0
+                            ? "No subjects found"
+                            : "Select Subject"}
+                    </option>
                     {subjects.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.subject_name}
