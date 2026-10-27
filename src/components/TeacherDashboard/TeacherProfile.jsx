@@ -622,14 +622,14 @@ const TeacherProfile = () => {
                             value: /^[0-9]{10}$/,
                             message: "Enter a 10 digit phone number",
                           },
-                          // runs inside react-hook-form, so the form value
-                          // always matches what the user sees
-                          onChange: (e) => {
-                            e.target.value = e.target.value
-                              .replace(/[^0-9]/g, "")
-                              .slice(0, 10);
-                          },
                         })}
+                        // runs before react-hook-form reads the value, so the
+                        // stored value always matches what the user sees
+                        onInput={(e) => {
+                          e.target.value = e.target.value
+                            .replace(/[^0-9]/g, "")
+                            .slice(0, 10);
+                        }}
                         className={inputCls}
                       />
                     </Field>

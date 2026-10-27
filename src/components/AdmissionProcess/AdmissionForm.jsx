@@ -1,4 +1,10 @@
-import React, { useContext, useEffect, useRef, useState } from "react";
+import React, {
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useForm } from "react-hook-form";
 import {
   fetchGuardianType,
@@ -12,7 +18,7 @@ import {
   handleAdmissionForm,
 } from "../../services/api/Api";
 import { constants } from "../../global/constants";
-import { data, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import AdmissionSuccessful from "../Modals/AdmissionSuccessful";
 import { AuthContext } from "../../context/AuthContext";
 
@@ -25,6 +31,418 @@ const MAX_POLL_DURATION_MS = 15 * 60 * 1000; // stop waiting after 15 minutes
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// ---- Password rule ----
+// At least 8 characters, no spaces, with an uppercase letter, a lowercase
+// letter, a digit and ANY special character (_ - @ $ ! % * ? & # . etc.).
+const PASSWORD_REGEX =
+  /^(?=\S*[a-z])(?=\S*[A-Z])(?=\S*\d)(?=\S*[^A-Za-z\d\s])\S{8,}$/;
+const PASSWORD_MESSAGE =
+  "Password must be 8+ chars with uppercase, lowercase, number and special character";
+
+// ---- Responsive layout helpers ----
+// 1 column on phones, 2 on small tablets, 3-4 on desktops.
+const GRID_2 = "grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6";
+const GRID_3 =
+  "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6";
+const GRID_4 =
+  "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6";
+const ROW = "mt-4 sm:mt-6";
+const SECTION = "bg-base-200 p-4 sm:p-6 rounded-box mb-6";
+const SECTION_TITLE = "text-xl sm:text-2xl font-bold mb-4";
+
+const inputCls = (err) =>
+  `input input-bordered w-full min-w-0 focus:outline-none ${
+    err ? "input-error" : ""
+  }`;
+const selectCls = (err) =>
+  `select select-bordered w-full min-w-0 focus:outline-none cursor-pointer ${
+    err ? "select-error" : ""
+  }`;
+const pickerCls = (err) =>
+  `input input-bordered w-full min-w-0 flex items-center justify-between cursor-pointer overflow-hidden ${
+    err ? "input-error" : ""
+  }`;
+
+// Shared dropdown panel classes (city / state / country)
+const panelCls =
+  "absolute left-0 top-full z-20 bg-white dark:bg-[#242627] rounded w-full mt-1 shadow-lg border border-gray-300 dark:border-gray-600";
+const panelSearchCls =
+  "input input-bordered w-full min-w-0 focus:outline-none bg-white dark:bg-[#242627] text-gray-900 dark:text-gray-100 border border-gray-300 dark:border-gray-500";
+const optionCls =
+  "p-2 hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer text-gray-800 dark:text-gray-200 capitalize break-words";
+
+const byName = (a, b) => a.name.localeCompare(b.name);
+
+// ---- Shared input handlers ----
+const blockNegativeKeys = (e) => {
+  if (e.key === "-" || e.key === "e") e.preventDefault();
+};
+const blurOnWheel = (e) => e.target.blur();
+
+// Phone fields: digits only, max 10, first digit 6-9.
+// Only printable single characters are blocked, so mobile soft keyboards
+// (which can report keys like "Unidentified") are never blocked by mistake.
+const handlePhoneInput = (e) => {
+  e.target.value = e.target.value.replace(/\D/g, "").slice(0, 10);
+};
+const handlePhoneKeyDown = (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key && e.key.length === 1) {
+    if (!/\d/.test(e.key)) {
+      e.preventDefault();
+      return;
+    }
+    if (e.target.selectionStart === 0 && /[0-5]/.test(e.key)) {
+      e.preventDefault();
+    }
+  }
+};
+
+// ---- Turning server errors into readable messages ----
+// The backend (DRF) answers a bad request with something like
+//   { address_input: { country: ["This field is required."] },
+//     previous_standard_studied: ["Ensure this field has no more than 15 characters."] }
+// applyServerErrors() (inside the component) pushes those messages onto the
+// matching inputs; formatSubmitErrors() builds the summary banner.
+const GENERAL_KEYS = ["message", "detail", "error", "status", "success", "code"];
+
+const GROUP_LABELS = {
+  student: "Student",
+  guardian: "Guardian",
+  address_input: "Address",
+  banking_detail_input: "Bank",
+};
+
+const FIELD_LABELS = {
+  first_name: "First Name",
+  middle_name: "Middle Name",
+  last_name: "Last Name",
+  email: "Email",
+  password: "Password",
+  father_name: "Father's Name",
+  mother_name: "Mother's Name",
+  date_of_birth: "Date of Birth",
+  gender: "Gender",
+  religion: "Religion",
+  category: "Category",
+  height: "Height",
+  weight: "Weight",
+  blood_group: "Blood Group",
+  number_of_siblings: "Number of Siblings",
+  scholar_number: "Scholar No.",
+  aadhaar_number: "Aadhaar No.",
+  FMID_number: "FMID No.",
+  apaar_number: "Apaar ID No.",
+  PEN_number: "PEN No.",
+  BPL_number: "BPL No.",
+  SSSMID: "SSSMID",
+  contact_number: "Contact Number",
+  roll_number: "Roll Number",
+  profile_picture: "Profile Picture",
+  phone_no: "Phone Number",
+  annual_income: "Annual Income",
+  means_of_livelihood: "Means of Livelihood",
+  qualification: "Qualification",
+  occupation: "Occupation",
+  designation: "Designation",
+  house_no: "House Number",
+  habitation: "Habitation",
+  ward_no: "Ward Number",
+  zone_no: "Zone",
+  block: "Block",
+  district: "District",
+  division: "Division",
+  area_code: "Pin Code",
+  country: "Country",
+  state: "State",
+  city: "City",
+  address_line: "Full Address Line",
+  account_no: "Account Number",
+  ifsc_code: "IFSC Code",
+  holder_name: "Account Holder Name",
+  bank_name: "Bank Name",
+  guardian_type_input: "Guardian Type",
+  year_level: "Year Level",
+  school_year: "School Year",
+  class_section: "Class Section & Stream",
+  enrollment_no: "Enrollment No.",
+  previous_school_name: "Previous School Name",
+  previous_standard_studied: "Previous Class/Grade",
+  admission_date: "Admission Date",
+  tc_letter: "TC Letter",
+  emergency_contact_no: "Emergency Contact",
+  entire_road_distance_from_home_to_school: "Distance to School",
+  obtain_marks: "Marks Obtained",
+  total_marks: "Total Marks",
+  previous_percentage: "Previous Percentage",
+  is_rte: "RTE Student",
+  rte_number: "RTE Number",
+  non_field_errors: "",
+};
+
+const humanizeKey = (key) =>
+  String(key)
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+
+const labelForPath = (path) => {
+  const keys = path.filter((p) => !/^\d+$/.test(String(p)));
+  if (keys.length === 0) return "";
+  const last = keys[keys.length - 1];
+  const lastLabel = Object.prototype.hasOwnProperty.call(FIELD_LABELS, last)
+    ? FIELD_LABELS[last]
+    : humanizeKey(last);
+  if (keys.length > 1 && GROUP_LABELS[keys[0]]) {
+    return lastLabel ? `${GROUP_LABELS[keys[0]]} – ${lastLabel}` : "";
+  }
+  return lastLabel;
+};
+
+const collectErrors = (node, path, out) => {
+  if (node === null || node === undefined) return;
+  if (typeof node === "string") {
+    out.push({ path, message: node });
+    return;
+  }
+  if (Array.isArray(node)) {
+    if (node.every((n) => typeof n === "string")) {
+      if (node.length) out.push({ path, message: node.join(" ") });
+      return;
+    }
+    node.forEach((item, i) => collectErrors(item, [...path, i], out));
+    return;
+  }
+  if (typeof node === "object") {
+    Object.entries(node).forEach(([k, v]) =>
+      collectErrors(v, [...path, k], out)
+    );
+    return;
+  }
+  out.push({ path, message: String(node) });
+};
+
+const errorToLine = ({ path, message }) => {
+  const label = labelForPath(path);
+  const msg = String(message).trim();
+  if (!label) return msg;
+  if (/may not be (null|blank)|field is required|^required$/i.test(msg)) {
+    return `${label} is required.`;
+  }
+  if (/^this field/i.test(msg)) {
+    return `${label} ${msg.replace(/^this field\s*/i, "")}`;
+  }
+  return `${label}: ${msg}`;
+};
+
+const statusFallback = (err) => {
+  const status = err?.response?.status;
+  if (status === 400)
+    return "Some information is missing or invalid. Please review the form and try again.";
+  if (status === 401) return "Your session has expired. Please log in again.";
+  if (status === 403) return "You do not have permission to submit this form.";
+  if (status === 404) return "The admission service could not be found.";
+  if (status === 409) return "This student or guardian already exists.";
+  if (status === 413) return "The uploaded file is too large.";
+  if (status >= 500)
+    return "The server ran into a problem. Please try again later.";
+  const msg = err?.message;
+  if (msg && !/status code \d+/i.test(msg)) return msg;
+  return "Something went wrong while submitting the form. Please try again.";
+};
+
+// Returns { title, lines } - lines is a list of plain-text messages
+const formatSubmitErrors = (err) => {
+  if (err && err.request && !err.response) {
+    return {
+      title: "Connection problem",
+      lines: [
+        "Unable to reach the server. Please check your internet connection and try again.",
+      ],
+    };
+  }
+
+  const raw =
+    err?.response?.data ??
+    (err && typeof err === "object" && !(err instanceof Error)
+      ? err
+      : undefined);
+
+  const lines = [];
+
+  if (raw && typeof raw === "object") {
+    const source =
+      raw.errors && typeof raw.errors === "object" ? raw.errors : raw;
+
+    const collected = [];
+    if (source === raw) {
+      Object.entries(raw)
+        .filter(([k]) => !GENERAL_KEYS.includes(k))
+        .forEach(([k, v]) => collectErrors(v, [k], collected));
+    } else {
+      collectErrors(source, [], collected);
+    }
+    collected.forEach((item) => lines.push(errorToLine(item)));
+
+    if (lines.length === 0) {
+      ["message", "detail", "error"].forEach((k) => {
+        if (typeof raw[k] === "string" && raw[k].trim())
+          lines.push(raw[k].trim());
+      });
+    }
+  } else if (typeof raw === "string") {
+    const text = raw.trim();
+    if (text && text.length < 300 && !text.startsWith("<")) lines.push(text);
+  }
+
+  const unique = [...new Set(lines.filter(Boolean))];
+  if (unique.length === 0) unique.push(statusFallback(err));
+
+  return {
+    title:
+      unique.length > 1
+        ? `Please fix the following (${unique.length})`
+        : "Could not submit the form",
+    lines: unique,
+  };
+};
+
+// Label + control + error message.
+// When `error` is set the wrapper gets data-invalid (used for scroll-to-error)
+// and every input/select/textarea inside gets a red border.
+const Field = ({ icon, label, required, error, className = "", children }) => (
+  <div
+    data-invalid={error ? "true" : undefined}
+    className={`form-control min-w-0 ${className} ${
+      error
+        ? "[&_input]:border-error [&_select]:border-error [&_textarea]:border-error"
+        : ""
+    }`}
+  >
+    <label className="label">
+      <span className="label-text flex items-center gap-2">
+        <i className={`fa-solid ${icon} text-sm`}></i>
+        {label} {required && <span className="text-error">*</span>}
+      </span>
+    </label>
+    {children}
+    {error && (
+      <span role="alert" className="text-error text-sm mt-1">
+        {error.message}
+      </span>
+    )}
+  </div>
+);
+
+// Reusable searchable dropdown (City / State / Country).
+// A hidden registered input holds the id, so react-hook-form validates it and
+// server errors can be attached to it like any other field.
+const SearchSelect = ({
+  icon,
+  label,
+  required,
+  error,
+  options,
+  value,
+  onSelect,
+  registration,
+  placeholder,
+}) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    const onDown = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
+
+  const selected = options.find((o) => String(o.id) === String(value));
+  const q = query.trim().toLowerCase();
+  const visible = q
+    ? options.filter((o) => o.name.toLowerCase().includes(q))
+    : options;
+
+  const pick = (o) => {
+    onSelect(String(o.id));
+    setQuery("");
+    setOpen(false);
+  };
+
+  return (
+    <Field
+      icon={icon}
+      label={label}
+      required={required}
+      error={error}
+      className="relative"
+    >
+      <div
+        ref={wrapRef}
+        className="relative"
+        onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
+      >
+        <input type="hidden" {...registration} />
+
+        <button
+          type="button"
+          className={`${pickerCls(error)} text-left`}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+        >
+          <span
+            className={`truncate ${
+              selected ? "text-gray-700 dark:text-gray-200" : "text-gray-400"
+            }`}
+          >
+            {selected ? selected.name : placeholder}
+          </span>
+          <i className="fa-solid fa-chevron-down text-xs ml-2"></i>
+        </button>
+
+        {open && (
+          <div className={panelCls}>
+            <div className="p-2 sticky top-0 shadow-sm bg-white dark:bg-[#242627]">
+              <input
+                type="text"
+                autoFocus
+                placeholder={`Search ${label}...`}
+                className={panelSearchCls}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+            <div className="max-h-40 overflow-y-auto" role="listbox">
+              {visible.length > 0 ? (
+                visible.map((o) => (
+                  <p
+                    key={o.id}
+                    role="option"
+                    aria-selected={String(o.id) === String(value)}
+                    className={optionCls}
+                    onClick={() => pick(o)}
+                  >
+                    {o.name}
+                  </p>
+                ))
+              ) : (
+                <p className="p-2 text-gray-500 dark:text-gray-400">
+                  No results found
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </Field>
+  );
+};
+
 export const AdmissionForm = () => {
   const { axiosInstance } = useContext(AuthContext);
   const navigate = useNavigate();
@@ -36,27 +454,16 @@ export const AdmissionForm = () => {
   const [country, setCountry] = useState([]);
   const [state, setState] = useState([]);
   const [city, setCity] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(false); // initial data load only
   const [error, setError] = useState(null);
-  const [showAlert, setShowAlert] = useState(false);
-  const [alertMessage, setAlertMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false); // form submit in progress
+  const [submitError, setSubmitError] = useState(null); // { title, lines }
   const [selectedGuardianType, setSelectedGuardianType] = useState("");
   const formRef = useRef(null);
+  const bannerRef = useRef(null);
   const [showAdmissionSuccessModal, setShowAdmissionSuccessModal] =
     useState(false);
   const [isRTE, setIsRTE] = useState(false);
-
-  const [showCityDropdown, setShowCityDropdown] = useState(false);
-  const [selectedCityName, setSelectedCityName] = useState("");
-  const [citySearchInput, setCitySearchInput] = useState("");
-
-  const [showCountryDropdown, setShowCountryDropdown] = useState(false);
-  const [selectedCountryName, setSelectedCountryName] = useState("");
-  const [countrySearchInput, setCountrySearchInput] = useState("");
-
-  const [showStateDropdown, setShowStateDropdown] = useState(false);
-  const [selectedStateName, setSelectedStateName] = useState("");
-  const [stateSearchInput, setStateSearchInput] = useState("");
 
   const [bankNames, setBankNames] = useState([]); // all bank names from API
   const [filteredBanks, setFilteredBanks] = useState([]); // filtered names while typing
@@ -80,17 +487,22 @@ export const AdmissionForm = () => {
   // Incremented to cancel an in-flight polling loop (modal closed / unmounted / new upload)
   const bulkRunRef = useRef(0);
   const bulkCloseTimerRef = useRef(null);
+  // Modal can be minimised to a small floating card while the job keeps running
+  const [bulkMinimized, setBulkMinimized] = useState(false);
+  const bulkMinimizedRef = useRef(false);
 
   const {
     register,
     watch,
     handleSubmit,
+    setError: setFieldError,
     formState: { errors },
     setValue,
     reset,
     resetField,
   } = useForm({
     mode: "onChange",
+    shouldFocusError: false, // we scroll/focus ourselves (hidden inputs cannot be focused)
     defaultValues: {
       student: {
         first_name: "",
@@ -157,6 +569,7 @@ export const AdmissionForm = () => {
       school_year: "",
       previous_school_name: "",
       previous_standard_studied: "",
+      admission_date: "",
       tc_letter: "",
       emergency_contact_no: "",
       entire_road_distance_from_home_to_school: "",
@@ -170,10 +583,14 @@ export const AdmissionForm = () => {
     },
   });
 
-  const bankNameInput = watch("banking_detail_input.bank_name");
   const selectedBankId = watch("banking_detail_input.bank_name");
   const obtainMarks = watch("obtain_marks");
   const totalMarks = watch("total_marks");
+
+  // Sorted lists for the searchable dropdowns (sorted once, not on every render)
+  const sortedCities = useMemo(() => [...city].sort(byName), [city]);
+  const sortedStates = useMemo(() => [...state].sort(byName), [state]);
+  const sortedCountries = useMemo(() => [...country].sort(byName), [country]);
 
   useEffect(() => {
     if (selectedBankId && bankNames.length) {
@@ -181,6 +598,10 @@ export const AdmissionForm = () => {
       if (b) setBankQuery(b.name);
     }
   }, [selectedBankId, bankNames]);
+
+  useEffect(() => {
+    bulkMinimizedRef.current = bulkMinimized;
+  }, [bulkMinimized]);
 
   // Stop polling + timers when the component unmounts
   useEffect(() => {
@@ -190,7 +611,7 @@ export const AdmissionForm = () => {
     };
   }, []);
 
-  // NEW: Auto-calculate percentage
+  // Auto-calculate percentage
   useEffect(() => {
     const obtain = parseFloat(obtainMarks);
     const total = parseFloat(totalMarks);
@@ -330,6 +751,7 @@ export const AdmissionForm = () => {
   };
 
   const resetBulkState = () => {
+    setBulkMinimized(false);
     setBulkUploadFile(null);
     setBulkUploadSchoolYear("");
     setBulkUploadError("");
@@ -340,6 +762,11 @@ export const AdmissionForm = () => {
   };
 
   const handleBulkUploadClick = () => {
+    // A job is already open (maybe minimised): bring it back, do not cancel it
+    if (showBulkUploadModal) {
+      setBulkMinimized(false);
+      return;
+    }
     bulkRunRef.current += 1; // cancel anything still running
     clearBulkCloseTimer();
     resetBulkState();
@@ -464,10 +891,14 @@ export const AdmissionForm = () => {
               } created.`
             );
             // Auto close after success
-            bulkCloseTimerRef.current = setTimeout(() => {
-              setShowBulkUploadModal(false);
-              resetBulkState();
-            }, 3000);
+            // (skipped while minimised so the floating card can show the result)
+            if (!bulkMinimizedRef.current) {
+              bulkCloseTimerRef.current = setTimeout(() => {
+                if (bulkMinimizedRef.current) return;
+                setShowBulkUploadModal(false);
+                resetBulkState();
+              }, 3000);
+            }
           }
           return;
         }
@@ -534,8 +965,55 @@ export const AdmissionForm = () => {
         )
       : 0;
 
+  // --------------------------------------------------------------
+  // SUBMIT + SERVER VALIDATION
+  // --------------------------------------------------------------
+
+  // Push DRF field errors onto the matching react-hook-form inputs, e.g.
+  // { address_input: { country: ["This field is required."] } }
+  //   -> setError("address_input.country", ...)
+  const applyServerErrors = (err) => {
+    const data = err?.response?.data;
+    if (!data || typeof data !== "object" || Array.isArray(data)) return;
+
+    const source =
+      data.errors && typeof data.errors === "object" ? data.errors : data;
+
+    const collected = [];
+    Object.entries(source)
+      .filter(([k]) => !GENERAL_KEYS.includes(k) && k !== "non_field_errors")
+      .forEach(([k, v]) => collectErrors(v, [k], collected));
+
+    collected.forEach(({ path, message }) => {
+      const name = path.join(".");
+      if (name) {
+        setFieldError(name, { type: "server", message: String(message) });
+      }
+    });
+  };
+
+  // Scroll to (and focus) the first invalid field, or to the banner when the
+  // problem is not tied to a field (network error, 500, ...).
+  const scrollToFirstError = () => {
+    setTimeout(() => {
+      const wrap = formRef.current?.querySelector("[data-invalid]");
+      if (!wrap) {
+        bannerRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+        return;
+      }
+      wrap.scrollIntoView({ behavior: "smooth", block: "center" });
+      wrap
+        .querySelector("input:not([type=hidden]), select, textarea, button")
+        ?.focus({ preventScroll: true });
+    }, 50);
+  };
+
   const onSubmit = async (data) => {
-    setLoading(true);
+    setSubmitting(true);
+    setSubmitError(null);
     const submitFormData = new FormData();
 
     data.student.roll_number = null;
@@ -554,12 +1032,12 @@ export const AdmissionForm = () => {
           // Convert empty or undefined to null for nested objects
           if (val === "" || val === undefined) val = null;
 
-          // **Skip empty arrays entirely**
+          // Skip empty arrays entirely
           if (Array.isArray(val) && val.length === 0) {
             return;
           }
 
-          // **Handle non-empty arrays**
+          // Handle non-empty arrays
           if (Array.isArray(val)) {
             val.forEach((item, index) => {
               submitFormData.append(`${key}[${subKey}][${index}]`, item);
@@ -567,7 +1045,7 @@ export const AdmissionForm = () => {
             return;
           }
 
-          // Convert numeric fields - FIXED VERSION
+          // Convert numeric fields
           if (["annual_income"].includes(subKey)) {
             if (val === "" || val === undefined || val === null) {
               val = null; // Explicitly set empty values to null
@@ -597,13 +1075,12 @@ export const AdmissionForm = () => {
           if (isNaN(val)) val = null;
         }
 
-        // **CRITICAL: Special handling for enrollment_no**
-        // Always send it, even if empty (send as empty string, not null)
+        // enrollment_no is always sent, even when empty (empty string, not null)
         if (key === "enrollment_no") {
           const enrollmentValue =
             val === null || val === undefined ? "" : String(val);
           submitFormData.append(key, enrollmentValue);
-          return; // Exit early after appending
+          return;
         }
 
         // Skip guardian_type_input if empty or null
@@ -614,11 +1091,8 @@ export const AdmissionForm = () => {
           return;
         }
 
-        // For all other root-level fields
-        // Convert undefined to null, but keep empty strings for required fields
+        // Convert undefined to null; append only non-null, non-empty values
         if (val === undefined) val = null;
-
-        // Only append non-null and non-empty-string values (except enrollment_no which was handled above)
         if (val !== null && val !== "") {
           submitFormData.append(key, val);
         }
@@ -640,25 +1114,18 @@ export const AdmissionForm = () => {
     }
 
     try {
-      // Debug: Log what's being sent
-      const debugPayload = {};
-      for (let [key, value] of submitFormData.entries()) {
-        debugPayload[key] = value;
-      }
-
       await handleAdmissionForm(submitFormData);
       setShowAdmissionSuccessModal(true);
       reset();
       setSelectedGuardianType("");
       setIsRTE(false);
-    } catch (error) {
-      setAlertMessage(
-        `Failed to submit the form: ${error.response?.data?.message || error.message
-        }`
-      );
-      setShowAlert(true);
+      setBankQuery("");
+    } catch (err) {
+      applyServerErrors(err); // red border + message under each input
+      setSubmitError(formatSubmitErrors(err)); // summary banner (also covers network / 500)
+      scrollToFirstError();
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
@@ -718,7 +1185,7 @@ export const AdmissionForm = () => {
       setCreatingBank(true);
       setCreateBankError("");
 
-      const res = await addBankName({ name: raw }); // API you already have
+      const res = await addBankName({ name: raw });
 
       const saved = {
         id: res?.id ?? res?.data?.id,
@@ -749,22 +1216,6 @@ export const AdmissionForm = () => {
       setCreatingBank(false);
     }
   };
-
-  const filteredCities = city
-    .filter((c) => c.name.toLowerCase().includes(citySearchInput.toLowerCase()))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  const filteredCountries = country
-    .filter((c) =>
-      c.name.toLowerCase().includes(countrySearchInput.toLowerCase())
-    )
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  const filteredStates = state
-    .filter((s) =>
-      s.name.toLowerCase().includes(stateSearchInput.toLowerCase())
-    )
-    .sort((a, b) => a.name.localeCompare(b.name));
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -804,20 +1255,21 @@ export const AdmissionForm = () => {
   }
 
   return (
-    <div className="mb-24 md:mb-10">
+    <div className="mb-24 md:mb-10 px-2 sm:px-4 overflow-x-hidden">
       <style>{constants.hideEdgeRevealStyle}</style>
       <form
         ref={formRef}
-        className="w-full max-w-7xl mx-auto p-6 bg-base-100 rounded-box my-5 shadow-sm focus:outline-none mb-10"
-        onSubmit={handleSubmit(onSubmit)}
+        noValidate
+        className="w-full max-w-7xl mx-auto p-3 sm:p-6 bg-base-100 rounded-box my-3 sm:my-5 shadow-sm focus:outline-none mb-10"
+        onSubmit={handleSubmit(onSubmit, scrollToFirstError)}
       >
-        <div className="flex flex-col items-center mb-8">
-          <h1 className="text-3xl font-bold text-center mb-4">
+        <div className="flex flex-col items-center mb-6 sm:mb-8">
+          <h1 className="text-2xl sm:text-3xl font-bold text-center mb-4">
             Admission Form<i className="fa-solid fa-graduation-cap ml-2"></i>
           </h1>
           <button
             type="button"
-            className="btn bgTheme text-white hover:opacity-90 transition-opacity duration-200 no-wrap"
+            className="btn bgTheme text-white hover:opacity-90 transition-opacity duration-200 whitespace-nowrap w-full sm:w-auto"
             onClick={handleBulkUploadClick}
           >
             <i className="fa-solid fa-upload mr-2"></i>
@@ -825,10 +1277,42 @@ export const AdmissionForm = () => {
           </button>
         </div>
 
-        {/* Student Information Section */}
-        <div className="bg-base-200 p-6 rounded-box mb-6">
-          <h2 className="text-2xl font-bold mb-4">Student Information</h2>
-          <div className="grid grid-cols-1 md:grid-cols-1 mb-3">
+        {/* ===================== Submit error summary ===================== */}
+        {submitError && (
+          <div
+            ref={bannerRef}
+            role="alert"
+            className="mb-6 rounded-box border border-red-300 bg-red-50 p-4 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-semibold">
+                  <i className="fa-solid fa-circle-exclamation mr-2"></i>
+                  {submitError.title}
+                </p>
+                <ul className="mt-2 list-disc pl-5 text-sm space-y-1 break-words">
+                  {submitError.lines.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </div>
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost flex-shrink-0"
+                aria-label="Dismiss"
+                onClick={() => setSubmitError(null)}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ===================== Student Information ===================== */}
+        <div className={SECTION}>
+          <h2 className={SECTION_TITLE}>Student Information</h2>
+
+          <div className="grid grid-cols-1 mb-3">
             <div className="form-control">
               <label className="label cursor-pointer">
                 <span className="label-text flex items-center gap-2">
@@ -844,14 +1328,14 @@ export const AdmissionForm = () => {
               </label>
             </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-user text-sm"></i>
-                  First Name <span className="text-error">*</span>
-                </span>
-              </label>
+
+          <div className={GRID_3}>
+            <Field
+              icon="fa-user"
+              label="First Name"
+              required
+              error={errors.student?.first_name}
+            >
               <input
                 type="text"
                 {...register("student.first_name", {
@@ -862,22 +1346,15 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="First Name"
-                className={`input input-bordered w-full focus:outline-none ${errors.student?.first_name ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.student?.first_name)}
               />
-              {errors.student?.first_name && (
-                <span className="text-error text-sm">
-                  {errors.student.first_name.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-user-pen text-sm"></i>
-                  Middle Name
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-user-pen"
+              label="Middle Name"
+              error={errors.student?.middle_name}
+            >
               <input
                 type="text"
                 {...register("student.middle_name", {
@@ -887,49 +1364,36 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Middle Name"
-                className="input input-bordered w-full focus:outline-none"
+                className={inputCls(errors.student?.middle_name)}
               />
-              {errors.student?.middle_name && (
-                <span className="text-error text-sm">
-                  {errors.student.middle_name.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-user-tag text-sm"></i>
-                  Last Name
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-user-tag"
+              label="Last Name"
+              error={errors.student?.last_name}
+            >
               <input
                 type="text"
                 {...register("student.last_name", {
-                  // required: "Last name is required",
                   maxLength: {
                     value: 100,
                     message: "Last name cannot exceed 100 characters",
                   },
                 })}
                 placeholder="Last Name"
-                className={`input input-bordered w-full focus:outline-none ${errors.student?.last_name ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.student?.last_name)}
               />
-              {errors.student?.last_name && (
-                <span className="text-error text-sm">
-                  {errors.student.last_name.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-envelope text-sm"></i>
-                  Email <span className="text-error">*</span>
-                </span>
-              </label>
+
+          <div className={`${GRID_2} ${ROW}`}>
+            <Field
+              icon="fa-envelope"
+              label="Email"
+              required
+              error={errors.student?.email}
+            >
               <input
                 type="email"
                 {...register("student.email", {
@@ -940,22 +1404,17 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="student@example.com"
-                className={`input input-bordered w-full focus:outline-none ${errors.student?.email ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.student?.email)}
               />
-              {errors.student?.email && (
-                <span className="text-error text-sm">
-                  {errors.student.email.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control relative">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-lock text-sm"></i>
-                  Password <span className="text-error">*</span>
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-lock"
+              label="Password"
+              required
+              error={errors.student?.password}
+              className="relative"
+            >
               <input
                 type={showPassword ? "password" : "text"}
                 {...register("student.password", {
@@ -965,46 +1424,40 @@ export const AdmissionForm = () => {
                     message: "Password cannot exceed 100 characters",
                   },
                   pattern: {
-                    value:
-                      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/,
-                    message:
-                      "Password must be 8+ chars with uppercase, lowercase, number and special character",
+                    value: PASSWORD_REGEX,
+                    message: PASSWORD_MESSAGE,
                   },
                 })}
                 placeholder="eg : Password@123"
-                className={`input input-bordered w-full pr-10 focus:outline-none ${errors.student?.password ? "input-error" : ""
-                  }`}
+                className={`${inputCls(errors.student?.password)} pr-10`}
               />
               <button
                 type="button"
                 className="passwordEyes text-gray-500"
                 onClick={handleShowPassword}
+                aria-label={showPassword ? "Show password" : "Hide password"}
               >
                 <i
-                  className={`fa-solid ${showPassword ? "fa-eye-slash" : "fa-eye"
-                    }`}
+                  className={`fa-solid ${
+                    showPassword ? "fa-eye-slash" : "fa-eye"
+                  }`}
                 ></i>
               </button>
-              {errors.student?.password && (
-                <span className="text-error text-sm">
-                  {errors.student.password.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-calendar-days text-sm"></i>
-                  Date of Birth
-                </span>
-              </label>
+
+          <div className={`${GRID_2} ${ROW}`}>
+            <Field
+              icon="fa-calendar-days"
+              label="Date of Birth"
+              error={errors.student?.date_of_birth}
+            >
               <input
                 type="date"
                 max={new Date().toISOString().split("T")[0]}
                 {...register("student.date_of_birth", {
                   validate: (value) => {
+                    if (!value) return true;
                     const selectedDate = new Date(value);
                     const today = new Date();
                     if (selectedDate > today) {
@@ -1013,49 +1466,33 @@ export const AdmissionForm = () => {
                     return true;
                   },
                 })}
-                className={`input input-bordered w-full focus:outline-none ${errors.student?.date_of_birth ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.student?.date_of_birth)}
               />
-              {errors.student?.date_of_birth && (
-                <span className="text-error text-sm">
-                  {errors.student.date_of_birth.message}
-                </span>
-              )}
-            </div>
+            </Field>
 
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-venus-mars text-sm"></i>
-                  Gender
-                </span>
-              </label>
+            <Field
+              icon="fa-venus-mars"
+              label="Gender"
+              error={errors.student?.gender}
+            >
               <select
                 {...register("student.gender")}
-                className={`select select-bordered w-full focus:outline-none cursor-pointer ${errors.student?.gender ? "select-error" : ""
-                  }`}
+                className={selectCls(errors.student?.gender)}
               >
                 <option value="">Select Gender</option>
                 <option value="Female">Female</option>
                 <option value="Male">Male</option>
                 <option value="Other">Other</option>
               </select>
-
-              {errors.student?.gender && (
-                <span className="text-error text-sm">
-                  {errors.student.gender.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-user text-sm"></i>
-                  Father's Name
-                </span>
-              </label>
+
+          <div className={`${GRID_3} ${ROW}`}>
+            <Field
+              icon="fa-user"
+              label="Father's Name"
+              error={errors.student?.father_name}
+            >
               <input
                 type="text"
                 {...register("student.father_name", {
@@ -1065,22 +1502,15 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Father's Name"
-                className={`input input-bordered w-full focus:outline-none ${errors.student?.father_name ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.student?.father_name)}
               />
-              {errors.student?.father_name && (
-                <span className="text-error text-sm">
-                  {errors.student.father_name.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-user text-sm"></i>
-                  Mother's Name
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-user"
+              label="Mother's Name"
+              error={errors.student?.mother_name}
+            >
               <input
                 type="text"
                 {...register("student.mother_name", {
@@ -1090,22 +1520,15 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Mother's Name"
-                className={`input input-bordered w-full focus:outline-none ${errors.student?.mother_name ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.student?.mother_name)}
               />
-              {errors.student?.mother_name && (
-                <span className="text-error text-sm">
-                  {errors.student.mother_name.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-hands-praying text-sm"></i>
-                  Religion
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-hands-praying"
+              label="Religion"
+              error={errors.student?.religion}
+            >
               <input
                 type="text"
                 {...register("student.religion", {
@@ -1115,28 +1538,20 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Religion"
-                className={`input input-bordered w-full focus:outline-none ${errors.student?.religion ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.student?.religion)}
               />
-              {errors.student?.religion && (
-                <span className="text-error text-sm">
-                  {errors.student.religion.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mt-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-tag text-sm"></i>
-                  Category
-                </span>
-              </label>
+
+          <div className={`${GRID_4} ${ROW}`}>
+            <Field
+              icon="fa-tag"
+              label="Category"
+              error={errors.student?.category}
+            >
               <select
                 {...register("student.category")}
-                className={`select select-bordered w-full focus:outline-none cursor-pointer ${errors.student?.category ? "select-error" : ""
-                  }`}
+                className={selectCls(errors.student?.category)}
               >
                 <option value="">Select Category</option>
                 <option value="GEN">General</option>
@@ -1144,72 +1559,52 @@ export const AdmissionForm = () => {
                 <option value="SC">Scheduled Caste</option>
                 <option value="ST">Scheduled Tribe</option>
               </select>
-              {errors.student?.category && (
-                <span className="text-error text-sm">
-                  {errors.student.category.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-ruler-vertical text-sm"></i>
-                  Height (cm)
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-ruler-vertical"
+              label="Height (cm)"
+              error={errors.student?.height}
+            >
               <input
                 type="number"
                 {...register("student.height", {
                   min: { value: 0, message: "Height must be positive" },
                 })}
                 placeholder="Height"
-                className={`input input-bordered w-full focus:outline-none ${errors.student?.height ? "input-error" : ""
-                  }`}
-                min={0} // prevents down arrow from going negative
-                onKeyDown={(e) => {
-                  if (e.key === "-" || e.key === "e") e.preventDefault(); // prevents typing negative or 'e'
-                }}
-                onWheel={(e) => e.target.blur()} // prevents scroll changing value
+                className={inputCls(errors.student?.height)}
+                min={0}
+                onKeyDown={blockNegativeKeys}
+                onWheel={blurOnWheel}
               />
-              {errors.student?.height && (
-                <span className="text-error text-sm">
-                  {errors.student.height.message}
-                </span>
-              )}
-            </div>
+            </Field>
 
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-weight-scale text-sm"></i>
-                  Weight (kg)
-                </span>
-              </label>
+            <Field
+              icon="fa-weight-scale"
+              label="Weight (kg)"
+              error={errors.student?.weight}
+            >
               <input
                 type="number"
                 {...register("student.weight", {
                   min: { value: 0, message: "Weight must be positive" },
                 })}
                 placeholder="Weight"
-                className={`input input-bordered w-full focus:outline-none ${errors.student?.weight ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.student?.weight)}
+                min={0}
+                onKeyDown={blockNegativeKeys}
+                onWheel={blurOnWheel}
               />
-              {errors.student?.weight && (
-                <span className="text-error text-sm">
-                  {errors.student.weight.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-heart-pulse text-sm"></i>
-                  Blood Group
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-heart-pulse"
+              label="Blood Group"
+              error={errors.student?.blood_group}
+            >
               <select
                 {...register("student.blood_group")}
-                className="select select-bordered w-full focus:outline-none cursor-pointer"
+                className={selectCls(errors.student?.blood_group)}
               >
                 <option value="">Select Blood Group</option>
                 <option value="A+">A+</option>
@@ -1221,19 +1616,15 @@ export const AdmissionForm = () => {
                 <option value="AB+">AB+</option>
                 <option value="AB-">AB-</option>
               </select>
-            </div>
+            </Field>
           </div>
 
-          {/* New Fields Section - 9 Additional Fields */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
-            {/* Scholar No. */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-id-card text-sm"></i>
-                  Scholar No.
-                </span>
-              </label>
+          <div className={`${GRID_3} ${ROW}`}>
+            <Field
+              icon="fa-id-card"
+              label="Scholar No."
+              error={errors.student?.scholar_number}
+            >
               <input
                 type="text"
                 {...register("student.scholar_number", {
@@ -1243,25 +1634,18 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Scholar Number"
-                className="input input-bordered w-full focus:outline-none"
+                className={inputCls(errors.student?.scholar_number)}
               />
-              {errors.student?.scholar_number && (
-                <span className="text-error text-sm">
-                  {errors.student.scholar_number.message}
-                </span>
-              )}
-            </div>
+            </Field>
 
-            {/* Aadhaar No. */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-address-card text-sm"></i>
-                  Aadhaar No.
-                </span>
-              </label>
+            <Field
+              icon="fa-address-card"
+              label="Aadhaar No."
+              error={errors.student?.aadhaar_number}
+            >
               <input
                 type="text"
+                inputMode="numeric"
                 {...register("student.aadhaar_number", {
                   pattern: {
                     value: /^\d{12}$/,
@@ -1273,26 +1657,18 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Aadhaar Number"
-                className="input input-bordered w-full focus:outline-none"
+                className={inputCls(errors.student?.aadhaar_number)}
                 onInput={(e) => {
                   e.target.value = e.target.value.replace(/\D/g, "");
                 }}
               />
-              {errors.student?.aadhaar_number && (
-                <span className="text-error text-sm">
-                  {errors.student.aadhaar_number.message}
-                </span>
-              )}
-            </div>
+            </Field>
 
-            {/* FMID No. */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-file-invoice text-sm"></i>
-                  FMID No.
-                </span>
-              </label>
+            <Field
+              icon="fa-file-invoice"
+              label="FMID No."
+              error={errors.student?.FMID_number}
+            >
               <input
                 type="text"
                 {...register("student.FMID_number", {
@@ -1302,25 +1678,17 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="FMID Number"
-                className="input input-bordered w-full focus:outline-none"
+                className={inputCls(errors.student?.FMID_number)}
               />
-              {errors.student?.FMID_number && (
-                <span className="text-error text-sm">
-                  {errors.student.FMID_number.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
-            {/* Apaar ID No. */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-id-badge text-sm"></i>
-                  Apaar ID No.
-                </span>
-              </label>
+          <div className={`${GRID_3} ${ROW}`}>
+            <Field
+              icon="fa-id-badge"
+              label="Apaar ID No."
+              error={errors.student?.apaar_number}
+            >
               <input
                 type="text"
                 {...register("student.apaar_number", {
@@ -1330,23 +1698,15 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Apaar ID Number"
-                className="input input-bordered w-full focus:outline-none"
+                className={inputCls(errors.student?.apaar_number)}
               />
-              {errors.student?.apaar_number && (
-                <span className="text-error text-sm">
-                  {errors.student.apaar_number.message}
-                </span>
-              )}
-            </div>
+            </Field>
 
-            {/* PEN No. */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-hashtag text-sm"></i>
-                  PEN No.
-                </span>
-              </label>
+            <Field
+              icon="fa-hashtag"
+              label="PEN No."
+              error={errors.student?.PEN_number}
+            >
               <input
                 type="text"
                 {...register("student.PEN_number", {
@@ -1356,23 +1716,15 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="PEN Number"
-                className="input input-bordered w-full focus:outline-none"
+                className={inputCls(errors.student?.PEN_number)}
               />
-              {errors.student?.PEN_number && (
-                <span className="text-error text-sm">
-                  {errors.student.PEN_number.message}
-                </span>
-              )}
-            </div>
+            </Field>
 
-            {/* BPL No. */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-id-card-alt text-sm"></i>
-                  BPL No.
-                </span>
-              </label>
+            <Field
+              icon="fa-id-card-alt"
+              label="BPL No."
+              error={errors.student?.BPL_number}
+            >
               <input
                 type="text"
                 {...register("student.BPL_number", {
@@ -1382,25 +1734,17 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="BPL Number"
-                className="input input-bordered w-full focus:outline-none"
+                className={inputCls(errors.student?.BPL_number)}
               />
-              {errors.student?.BPL_number && (
-                <span className="text-error text-sm">
-                  {errors.student.BPL_number.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
-            {/* Enrollment No. */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-graduation-cap text-sm"></i>
-                  Enrollment No.
-                </span>
-              </label>
+          <div className={`${GRID_3} ${ROW}`}>
+            <Field
+              icon="fa-graduation-cap"
+              label="Enrollment No."
+              error={errors.enrollment_no}
+            >
               <input
                 type="text"
                 {...register("enrollment_no", {
@@ -1410,22 +1754,15 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Enrollment Number"
-                className="input input-bordered w-full focus:outline-none"
+                className={inputCls(errors.enrollment_no)}
               />
-              {errors.enrollment_no && (
-                <span className="text-error text-sm">
-                  {errors.enrollment_no.message}
-                </span>
-              )}
-            </div>
-            {/* SSSMID */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-server text-sm"></i>
-                  SSSMID
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-server"
+              label="SSSMID"
+              error={errors.student?.SSSMID}
+            >
               <input
                 type="text"
                 {...register("student.SSSMID", {
@@ -1435,68 +1772,51 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="SSSMID"
-                className="input input-bordered w-full focus:outline-none"
+                className={inputCls(errors.student?.SSSMID)}
               />
-              {errors.student?.SSSMID && (
-                <span className="text-error text-sm">
-                  {errors.student.SSSMID.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-people-group text-sm"></i>
-                  Number of Siblings
-                </span>
-              </label>
+          <div className={`${GRID_2} ${ROW}`}>
+            <Field
+              icon="fa-people-group"
+              label="Number of Siblings"
+              error={errors.student?.number_of_siblings}
+            >
               <input
                 type="number"
+                min={0}
+                max={15}
                 {...register("student.number_of_siblings", {
                   min: {
                     value: 0,
                     message: "Number of siblings cannot be negative",
                   },
                   max: {
-                    value: 10,
-                    message: "Sibling cannot exceed more than 15",
-                  },
-                  validate: (value) => {
-                    if (value < 0)
-                      return "Number of siblings cannot be negative";
-                    if (value > 15) return "Sibling cannot exceed more than 15";
-                    return true;
+                    value: 15,
+                    message: "Number of siblings cannot exceed 15",
                   },
                 })}
                 placeholder="Number of Siblings"
+                onKeyDown={blockNegativeKeys}
+                onWheel={blurOnWheel}
                 onInput={(e) => {
                   const value = e.target.value;
-                  // Negative and 15+ value block
                   if (value < 0) e.target.value = 0;
                   if (value > 15) e.target.value = 15;
                 }}
-                className={`input input-bordered w-full focus:outline-none ${errors.student?.number_of_siblings ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.student?.number_of_siblings)}
               />
-              {errors.student?.number_of_siblings && (
-                <span className="text-error text-sm">
-                  {errors.student.number_of_siblings.message}
-                </span>
-              )}
-            </div>
+            </Field>
 
-            {/*RTE number field Render only when isRTE is true */}
+            {/* RTE number - rendered only when isRTE is true */}
             {isRTE && (
-              <div className="form-control">
-                <label className="label">
-                  <span className="label-text flex items-center gap-2">
-                    <i className="fa-solid fa-id-card text-sm"></i>
-                    RTE Number <span className="text-error">*</span>
-                  </span>
-                </label>
+              <Field
+                icon="fa-id-card"
+                label="RTE Number"
+                required
+                error={errors.rte_number}
+              >
                 <input
                   type="text"
                   maxLength={50}
@@ -1508,30 +1828,23 @@ export const AdmissionForm = () => {
                     },
                   })}
                   placeholder="RTE Number"
-                  className={`input input-bordered w-full focus:outline-none ${errors.rte_number ? "input-error" : ""
-                    }`}
+                  className={inputCls(errors.rte_number)}
                 />
-                {errors.rte_number && (
-                  <span className="text-error text-sm">
-                    {errors.rte_number.message}
-                  </span>
-                )}
-              </div>
+              </Field>
             )}
           </div>
         </div>
 
-        {/* Guardian Information Section */}
-        <div className="bg-base-200 p-6 rounded-box mb-6">
-          <h2 className="text-2xl font-bold mb-4">Guardian Information</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-user text-sm"></i>
-                  First Name
-                </span>
-              </label>
+        {/* ===================== Guardian Information ===================== */}
+        <div className={SECTION}>
+          <h2 className={SECTION_TITLE}>Guardian Information</h2>
+
+          <div className={GRID_3}>
+            <Field
+              icon="fa-user"
+              label="First Name"
+              error={errors.guardian?.first_name}
+            >
               <input
                 type="text"
                 {...register("guardian.first_name", {
@@ -1541,22 +1854,15 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="First Name"
-                className={`input input-bordered w-full focus:outline-none ${errors.guardian?.first_name ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.guardian?.first_name)}
               />
-              {errors.guardian?.first_name && (
-                <span className="text-error text-sm">
-                  {errors.guardian.first_name.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-user-pen text-sm"></i>
-                  Middle Name
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-user-pen"
+              label="Middle Name"
+              error={errors.guardian?.middle_name}
+            >
               <input
                 type="text"
                 {...register("guardian.middle_name", {
@@ -1566,21 +1872,15 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Middle Name"
-                className="input input-bordered w-full focus:outline-none"
+                className={inputCls(errors.guardian?.middle_name)}
               />
-              {errors.guardian?.middle_name && (
-                <span className="text-error text-sm">
-                  {errors.guardian.middle_name.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-user-tag text-sm"></i>
-                  Last Name
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-user-tag"
+              label="Last Name"
+              error={errors.guardian?.last_name}
+            >
               <input
                 type="text"
                 {...register("guardian.last_name", {
@@ -1590,24 +1890,17 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Last Name"
-                className={`input input-bordered w-full focus:outline-none ${errors.guardian?.last_name ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.guardian?.last_name)}
               />
-              {errors.guardian?.last_name && (
-                <span className="text-error text-sm">
-                  {errors.guardian.last_name.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-envelope text-sm"></i>
-                  Email
-                </span>
-              </label>
+
+          <div className={`${GRID_2} ${ROW}`}>
+            <Field
+              icon="fa-envelope"
+              label="Email"
+              error={errors.guardian?.email}
+            >
               <input
                 type="email"
                 {...register("guardian.email", {
@@ -1617,22 +1910,16 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="guardian@example.com"
-                className={`input input-bordered w-full focus:outline-none ${errors.guardian?.email ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.guardian?.email)}
               />
-              {errors.guardian?.email && (
-                <span className="text-error text-sm">
-                  {errors.guardian.email.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control relative">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-lock text-sm"></i>
-                  Password
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-lock"
+              label="Password"
+              error={errors.guardian?.password}
+              className="relative"
+            >
               <input
                 type={showGuardianPassword ? "password" : "text"}
                 {...register("guardian.password", {
@@ -1640,44 +1927,39 @@ export const AdmissionForm = () => {
                     value: 100,
                     message: "Password cannot exceed 100 characters",
                   },
+                  // optional field: the pattern only runs when something is typed
                   pattern: {
-                    value:
-                      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/,
-                    message:
-                      "Password must be 8+ chars with uppercase, lowercase, number and special character",
+                    value: PASSWORD_REGEX,
+                    message: PASSWORD_MESSAGE,
                   },
                 })}
                 placeholder="eg: Password@123"
-                className={`input input-bordered w-full pr-10 focus:outline-none ${errors.guardian?.password ? "input-error" : ""
-                  }`}
+                className={`${inputCls(errors.guardian?.password)} pr-10`}
               />
               <button
                 type="button"
                 className="passwordEyes text-gray-500"
                 onClick={handleShowGuardianPassword}
+                aria-label={
+                  showGuardianPassword ? "Show password" : "Hide password"
+                }
               >
                 <i
-                  className={`fa-solid ${showGuardianPassword ? "fa-eye-slash" : "fa-eye"
-                    }`}
+                  className={`fa-solid ${
+                    showGuardianPassword ? "fa-eye-slash" : "fa-eye"
+                  }`}
                 ></i>
               </button>
-              {errors.guardian?.password && (
-                <span className="text-error text-sm">
-                  {errors.guardian.password.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-user-shield text-sm"></i>
-                  Guardian Type
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-user-shield"
+              label="Guardian Type"
+              error={errors.guardian_type_input}
+            >
               <select
                 {...register("guardian_type_input", {})}
-                className={`select select-bordered w-full focus:outline-none cursor-pointer ${errors.guardian_type_input ? "select-error" : ""
-                  }`}
+                className={selectCls(errors.guardian_type_input)}
                 value={selectedGuardianType}
                 onChange={handleGuardianTypesChange}
               >
@@ -1688,21 +1970,17 @@ export const AdmissionForm = () => {
                   </option>
                 ))}
               </select>
-              {errors.guardian_type_input && (
-                <span className="text-error text-sm">
-                  {errors.guardian_type_input.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-phone text-sm"></i>
-                  Phone Number
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-phone"
+              label="Phone Number"
+              error={errors.guardian?.phone_no}
+            >
               <input
                 type="tel"
+                inputMode="numeric"
+                maxLength={10}
                 {...register("guardian.phone_no", {
                   pattern: {
                     value: /^[6789]\d{9}$/,
@@ -1717,41 +1995,12 @@ export const AdmissionForm = () => {
                     value: 10,
                     message: "Phone number must be exactly 10 digits",
                   },
-                  validate: (value) => {
-                    if (!value) return true; // ✅ skip validation if empty
-                    if (!/^[6789]/.test(value))
-                      return "Phone number must start with 6, 7, 8, or 9";
-                    return true;
-                  },
                 })}
                 placeholder="Phone Number"
-                className={`input input-bordered w-full focus:outline-none ${errors.guardian?.phone_no ? "input-error" : ""
-                  }`}
-                onInput={(e) => {
-                  // Remove any non-digit characters
-                  e.target.value = e.target.value.replace(/\D/g, "");
-                  // Limit to 10 digits
-                  if (e.target.value.length > 10) {
-                    e.target.value = e.target.value.slice(0, 10);
-                  }
-                }}
-                onKeyDown={(e) => {
-                  // Prevent typing of non-numeric characters except Backspace, Tab, Delete, Arrow keys
-                  if (
-                    !/[\d]|Backspace|Tab|Delete|ArrowLeft|ArrowRight|ArrowUp|ArrowDown/.test(
-                      e.key
-                    )
-                  ) {
-                    e.preventDefault();
-                  }
-
-                  // Prevent typing if first character is not 6,7,8,9 when at position 0
-                  if (e.target.selectionStart === 0 && /[0-5]/.test(e.key)) {
-                    e.preventDefault();
-                  }
-                }}
+                className={inputCls(errors.guardian?.phone_no)}
+                onInput={handlePhoneInput}
+                onKeyDown={handlePhoneKeyDown}
                 onPaste={(e) => {
-                  // Get pasted data
                   const pastedData = e.clipboardData
                     .getData("text")
                     .replace(/\D/g, "");
@@ -1759,30 +2008,22 @@ export const AdmissionForm = () => {
                   // Check if pasted data starts with valid digit
                   if (!/^[6789]/.test(pastedData)) {
                     e.preventDefault();
-                    // Optional: Show a temporary message
                     alert("Pasted phone number must start with 6, 7, 8, or 9");
                   }
                 }}
               />
-              {errors.guardian?.phone_no && (
-                <span className="text-error text-sm">
-                  {errors.guardian.phone_no.type === "validStart"
-                    ? errors.guardian.phone_no.message
-                    : errors.guardian.phone_no.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-money-bill-wave text-sm"></i>
-                  Annual Income
-                </span>
-              </label>
+
+          <div className={`${GRID_3} ${ROW}`}>
+            <Field
+              icon="fa-money-bill-wave"
+              label="Annual Income"
+              error={errors.guardian?.annual_income}
+            >
               <input
                 type="number"
+                min={0}
                 {...register("guardian.annual_income", {
                   min: {
                     value: 0,
@@ -1790,38 +2031,32 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Annual Income"
-                className={`input input-bordered w-full focus:outline-none ${errors.guardian?.annual_income ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.guardian?.annual_income)}
+                onKeyDown={blockNegativeKeys}
+                onWheel={blurOnWheel}
               />
-              {errors.guardian?.annual_income && (
-                <span className="text-error text-sm">
-                  {errors.guardian.annual_income.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-briefcase text-sm"></i>
-                  Means of Livelihood
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-briefcase"
+              label="Means of Livelihood"
+              error={errors.guardian?.means_of_livelihood}
+            >
               <select
                 {...register("guardian.means_of_livelihood")}
-                className="select select-bordered w-full focus:outline-none cursor-pointer"
+                className={selectCls(errors.guardian?.means_of_livelihood)}
               >
                 <option value="">Select</option>
                 <option value="Govt">Government</option>
                 <option value="Non-Govt">Non-Government</option>
               </select>
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-graduation-cap text-sm"></i>
-                  Qualification
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-graduation-cap"
+              label="Qualification"
+              error={errors.guardian?.qualification}
+            >
               <input
                 type="text"
                 {...register("guardian.qualification", {
@@ -1831,24 +2066,17 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Qualification"
-                className={`input input-bordered w-full focus:outline-none ${errors.guardian?.qualification ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.guardian?.qualification)}
               />
-              {errors.guardian?.qualification && (
-                <span className="text-error text-sm">
-                  {errors.guardian.qualification.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-briefcase text-sm"></i>
-                  Occupation
-                </span>
-              </label>
+
+          <div className={`${GRID_2} ${ROW}`}>
+            <Field
+              icon="fa-briefcase"
+              label="Occupation"
+              error={errors.guardian?.occupation}
+            >
               <input
                 type="text"
                 {...register("guardian.occupation", {
@@ -1858,22 +2086,15 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Occupation"
-                className={`input input-bordered w-full focus:outline-none ${errors.guardian?.occupation ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.guardian?.occupation)}
               />
-              {errors.guardian?.occupation && (
-                <span className="text-error text-sm">
-                  {errors.guardian.occupation.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-id-card text-sm"></i>
-                  Designation
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-id-card"
+              label="Designation"
+              error={errors.guardian?.designation}
+            >
               <input
                 type="text"
                 {...register("guardian.designation", {
@@ -1883,36 +2104,28 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Designation"
-                className="input input-bordered w-full focus:outline-none"
+                className={inputCls(errors.guardian?.designation)}
               />
-              {errors.guardian?.designation && (
-                <span className="text-error text-sm">
-                  {errors.guardian.designation.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
         </div>
 
-        {/* Academic Information Section */}
-        <div className="bg-base-200 p-6 rounded-box mb-6">
-          <h2 className="text-2xl font-bold mb-4">Academic Information</h2>
+        {/* ===================== Academic Information ===================== */}
+        <div className={SECTION}>
+          <h2 className={SECTION_TITLE}>Academic Information</h2>
 
-          {/* Row 1: Year Level & School Year */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-graduation-cap text-sm"></i>
-                  Year Level <span className="text-error">*</span>
-                </span>
-              </label>
+          <div className={GRID_2}>
+            <Field
+              icon="fa-graduation-cap"
+              label="Year Level"
+              required
+              error={errors.year_level}
+            >
               <select
                 {...register("year_level", {
                   required: "Year level is required",
                 })}
-                className={`select select-bordered w-full focus:outline-none cursor-pointer ${errors.year_level ? "select-error" : ""
-                  }`}
+                className={selectCls(errors.year_level)}
               >
                 <option value="">Select Year Level</option>
                 {yearLevel.map((yearlev) => (
@@ -1921,25 +2134,19 @@ export const AdmissionForm = () => {
                   </option>
                 ))}
               </select>
-              {errors.year_level && (
-                <span className="text-error text-sm">
-                  {errors.year_level.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-calendar text-sm"></i>
-                  School Year <span className="text-error">*</span>
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-calendar"
+              label="School Year"
+              required
+              error={errors.school_year}
+            >
               <select
                 {...register("school_year", {
                   required: "School year is required",
                 })}
-                className={`select select-bordered w-full focus:outline-none cursor-pointer ${errors.school_year ? "select-error" : ""
-                  }`}
+                className={selectCls(errors.school_year)}
               >
                 <option value="">Select School Year</option>
                 {schoolYears.map((schoolYear) => (
@@ -1948,29 +2155,21 @@ export const AdmissionForm = () => {
                   </option>
                 ))}
               </select>
-              {errors.school_year && (
-                <span className="text-error text-sm">
-                  {errors.school_year.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
 
-          {/* Row 2: Class Section & Stream - NEW */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-chalkboard-user text-sm"></i>
-                  Class Section & Stream <span className="text-error">*</span>
-                </span>
-              </label>
+          <div className={`${GRID_2} ${ROW}`}>
+            <Field
+              icon="fa-chalkboard-user"
+              label="Class Section & Stream"
+              required
+              error={errors.class_section}
+            >
               <select
                 {...register("class_section", {
-                  required: "Class section is required"
+                  required: "Class section is required",
                 })}
-                className={`select select-bordered w-full focus:outline-none cursor-pointer ${errors.class_section ? "select-error" : ""
-                  }`}
+                className={selectCls(errors.class_section)}
               >
                 <option value="">Select Section or Stream</option>
                 {/* Sections */}
@@ -1979,33 +2178,22 @@ export const AdmissionForm = () => {
                 <option value="C">Section C</option>
                 <option value="D">Section D</option>
                 {/* Streams */}
-                <option value="PCM">PCM (Physics, Chemistry, Mathematics)</option>
+                <option value="PCM">
+                  PCM (Physics, Chemistry, Mathematics)
+                </option>
                 <option value="PCB">PCB (Physics, Chemistry, Biology)</option>
                 <option value="COMM">COMM (Commerce)</option>
                 <option value="ARTS">ARTS (Arts)</option>
               </select>
-              {errors.class_section && (
-                <span className="text-error text-sm">
-                  {errors.class_section.message}
-                </span>
-              )}
-            </div>
-
-            {/* Optional: Extra field if needed */}
-            <div className="form-control">
-              {/* You can add another field here if needed */}
-            </div>
+            </Field>
           </div>
 
-          {/* Row 3: Previous School & Previous Class */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-school text-sm"></i>
-                  Previous School Name
-                </span>
-              </label>
+          <div className={`${GRID_2} ${ROW}`}>
+            <Field
+              icon="fa-school"
+              label="Previous School Name"
+              error={errors.previous_school_name}
+            >
               <input
                 type="text"
                 {...register("previous_school_name", {
@@ -2015,51 +2203,36 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Previous School Name"
-                className={`input input-bordered w-full focus:outline-none ${errors.previous_school_name ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.previous_school_name)}
               />
-              {errors.previous_school_name && (
-                <span className="text-error text-sm">
-                  {errors.previous_school_name.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-book text-sm"></i>
-                  Previous Class/Grade
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-book"
+              label="Previous Class/Grade"
+              error={errors.previous_standard_studied}
+            >
               <input
                 type="text"
+                maxLength={15}
                 {...register("previous_standard_studied", {
                   maxLength: {
-                    value: 200,
-                    message: "Class/grade cannot exceed 200 characters",
+                    value: 15,
+                    message: "Class/grade cannot exceed 15 characters",
                   },
                 })}
-                placeholder="Previous Class/Grade"
-                className={`input input-bordered w-full focus:outline-none ${errors.previous_standard_studied ? "input-error" : ""
-                  }`}
+                placeholder="e.g. 8th"
+                className={inputCls(errors.previous_standard_studied)}
               />
-              {errors.previous_standard_studied && (
-                <span className="text-error text-sm">
-                  {errors.previous_standard_studied.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
 
-          {/* Row 4: Admission Date & TC Letter */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-calendar-check text-sm"></i>
-                  Admission Date
-                </span>
-              </label>
+          <div className={`${GRID_2} ${ROW}`}>
+            <Field
+              icon="fa-calendar-check"
+              label="Admission Date"
+              error={errors.admission_date}
+            >
               <input
                 type="date"
                 max={new Date().toISOString().split("T")[0]}
@@ -2074,57 +2247,38 @@ export const AdmissionForm = () => {
                     return true;
                   },
                 })}
-                className={`input input-bordered w-full focus:outline-none ${errors.admission_date ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.admission_date)}
               />
-              {errors.admission_date && (
-                <span className="text-error text-sm">
-                  {errors.admission_date.message}
-                </span>
-              )}
-            </div>
+            </Field>
 
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-file text-sm"></i>
-                  TC Letter
-                </span>
-              </label>
+            <Field icon="fa-file" label="TC Letter" error={errors.tc_letter}>
               <select
-                {...register("tc_letter", {
-                })}
-                className={`select select-bordered w-full focus:outline-none cursor-pointer ${errors.tc_letter ? "select-error" : ""
-                  }`}
+                {...register("tc_letter", {})}
+                className={selectCls(errors.tc_letter)}
               >
                 <option value="">Select</option>
                 <option value="no">No</option>
                 <option value="not_applicable">Not Applicable</option>
                 <option value="yes">Yes</option>
               </select>
-              {errors.tc_letter && (
-                <span className="text-error text-sm">
-                  {errors.tc_letter.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
 
-          {/* Row 5: Emergency Contact & Distance */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-phone text-sm"></i>
-                  Emergency Contact
-                </span>
-              </label>
+          <div className={`${GRID_2} ${ROW}`}>
+            <Field
+              icon="fa-phone"
+              label="Emergency Contact"
+              error={errors.emergency_contact_no}
+            >
               <input
                 type="tel"
+                inputMode="numeric"
+                maxLength={10}
                 {...register("emergency_contact_no", {
                   pattern: {
                     value: /^[6789]\d{9}$/,
-                    message: "Emergency contact must start with 6, 7, 8, or 9 and be exactly 10 digits",
+                    message:
+                      "Emergency contact must start with 6, 7, 8, or 9 and be exactly 10 digits",
                   },
                   minLength: {
                     value: 10,
@@ -2136,159 +2290,104 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Emergency Contact"
-                className={`input input-bordered w-full focus:outline-none ${errors.emergency_contact_no ? "input-error" : ""
-                  }`}
-                onInput={(e) => {
-                  e.target.value = e.target.value.replace(/\D/g, "");
-                  if (e.target.value.length > 10) {
-                    e.target.value = e.target.value.slice(0, 10);
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (
-                    !/[\d]|Backspace|Tab|Delete|ArrowLeft|ArrowRight|ArrowUp|ArrowDown/.test(
-                      e.key
-                    )
-                  ) {
-                    e.preventDefault();
-                  }
-                  if (e.target.selectionStart === 0 && /[0-5]/.test(e.key)) {
-                    e.preventDefault();
-                  }
-                }}
+                className={inputCls(errors.emergency_contact_no)}
+                onInput={handlePhoneInput}
+                onKeyDown={handlePhoneKeyDown}
               />
-              {errors.emergency_contact_no && (
-                <span className="text-error text-sm">
-                  {errors.emergency_contact_no.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-road text-sm"></i>
-                  Distance to School (km)
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-road"
+              label="Distance to School (km)"
+              error={errors.entire_road_distance_from_home_to_school}
+            >
               <input
                 type="number"
+                min={0}
                 {...register("entire_road_distance_from_home_to_school", {
                   min: { value: 0, message: "Distance cannot be negative" },
-                  maxLength: {
-                    value: 100,
-                    message: "Distance cannot exceed 100 characters",
-                  },
                 })}
                 placeholder="Distance in km"
-                className={`input input-bordered w-full focus:outline-none ${errors.entire_road_distance_from_home_to_school
-                  ? "input-error"
-                  : ""
-                  }`}
+                className={inputCls(
+                  errors.entire_road_distance_from_home_to_school
+                )}
+                onKeyDown={blockNegativeKeys}
+                onWheel={blurOnWheel}
               />
-              {errors.entire_road_distance_from_home_to_school && (
-                <span className="text-error text-sm">
-                  {errors.entire_road_distance_from_home_to_school.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
 
-          {/* Row 6: Marks */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-marker text-sm"></i>
-                  Marks Obtained
-                </span>
-              </label>
+          <div className={`${GRID_3} ${ROW}`}>
+            <Field
+              icon="fa-marker"
+              label="Marks Obtained"
+              error={errors.obtain_marks}
+            >
               <input
                 type="number"
+                min={0}
                 {...register("obtain_marks", {
                   min: { value: 0, message: "Marks cannot be negative" },
                 })}
                 placeholder="Marks Obtained"
-                className={`input input-bordered w-full focus:outline-none ${errors.obtain_marks ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.obtain_marks)}
+                onKeyDown={blockNegativeKeys}
+                onWheel={blurOnWheel}
               />
-              {errors.obtain_marks && (
-                <span className="text-error text-sm">
-                  {errors.obtain_marks.message}
-                </span>
-              )}
-            </div>
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-chart-simple text-sm"></i>
-                  Total Marks
-                </span>
-              </label>
+            </Field>
+
+            <Field
+              icon="fa-chart-simple"
+              label="Total Marks"
+              error={errors.total_marks}
+            >
               <input
                 type="number"
+                min={0}
                 {...register("total_marks", {
                   min: { value: 0, message: "Total marks cannot be negative" },
                 })}
                 placeholder="Total Marks"
-                className={`input input-bordered w-full focus:outline-none ${errors.total_marks ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.total_marks)}
+                onKeyDown={blockNegativeKeys}
+                onWheel={blurOnWheel}
               />
-              {errors.total_marks && (
-                <span className="text-error text-sm">
-                  {errors.total_marks.message}
-                </span>
-              )}
-            </div>
+            </Field>
 
-            {/* Previous Percentage Field */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-percent text-sm"></i>
-                  Previous Percentage
-                </span>
-              </label>
+            <Field
+              icon="fa-percent"
+              label="Previous Percentage"
+              error={errors.previous_percentage}
+            >
               <input
                 type="number"
                 {...register("previous_percentage", {
                   min: { value: 0, message: "Percentage cannot be negative" },
                   max: { value: 100, message: "Percentage cannot exceed 100%" },
-                  validate: (value) => {
-                    if (value && (value < 0 || value > 100)) {
-                      return "Percentage must be between 0 and 100";
-                    }
-                    return true;
-                  },
                 })}
                 placeholder="Previous Percentage"
                 step="0.01"
-                className={`input input-bordered w-full focus:outline-none ${errors.previous_percentage ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.previous_percentage)}
                 onInput={(e) => {
                   const value = parseFloat(e.target.value);
                   if (value > 100) e.target.value = 100;
                   if (value < 0) e.target.value = 0;
                 }}
               />
-              {errors.previous_percentage && (
-                <span className="text-error text-sm">
-                  {errors.previous_percentage.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
         </div>
-        <div className="bg-base-200 p-6 rounded-box mb-6">
-          <h2 className="text-2xl font-bold mb-4">Residential Address</h2>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-            {/* House Number - OPTIONAL */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-home text-sm"></i>
-                  House Number
-                </span>
-              </label>
+
+        {/* ===================== Residential Address ===================== */}
+        <div className={SECTION}>
+          <h2 className={SECTION_TITLE}>Residential Address</h2>
+
+          <div className={GRID_4}>
+            <Field
+              icon="fa-home"
+              label="House Number"
+              error={errors.address_input?.house_no}
+            >
               <input
                 type="number"
                 {...register("address_input.house_no", {
@@ -2296,33 +2395,23 @@ export const AdmissionForm = () => {
                     if (!value || value === "") return true;
                     const num = Number(value);
                     if (isNaN(num)) return "Invalid house number";
-                    if (num < -2147483648 || num > 2147483647) return "Invalid house number";
+                    if (num < -2147483648 || num > 2147483647)
+                      return "Invalid house number";
                     return true;
-                  }
+                  },
                 })}
                 placeholder="House Number"
-                className={`input input-bordered w-full focus:outline-none ${errors.address_input?.house_no ? "input-error" : ""
-                  }`}
-                onKeyDown={(e) => {
-                  if (e.key === "-" || e.key === "e") e.preventDefault();
-                }}
-                onWheel={(e) => e.target.blur()}
+                className={inputCls(errors.address_input?.house_no)}
+                onKeyDown={blockNegativeKeys}
+                onWheel={blurOnWheel}
               />
-              {errors.address_input?.house_no && (
-                <span className="text-error text-sm">
-                  {errors.address_input.house_no.message}
-                </span>
-              )}
-            </div>
+            </Field>
 
-            {/* Habitation - OPTIONAL */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-map-location text-sm"></i>
-                  Habitation
-                </span>
-              </label>
+            <Field
+              icon="fa-map-location"
+              label="Habitation"
+              error={errors.address_input?.habitation}
+            >
               <input
                 type="text"
                 {...register("address_input.habitation", {
@@ -2332,24 +2421,15 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Habitation"
-                className={`input input-bordered w-full focus:outline-none ${errors.address_input?.habitation ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.address_input?.habitation)}
               />
-              {errors.address_input?.habitation && (
-                <span className="text-error text-sm">
-                  {errors.address_input.habitation.message}
-                </span>
-              )}
-            </div>
+            </Field>
 
-            {/* Block - OPTIONAL */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-building text-sm"></i>
-                  Block
-                </span>
-              </label>
+            <Field
+              icon="fa-building"
+              label="Block"
+              error={errors.address_input?.block}
+            >
               <input
                 type="text"
                 {...register("address_input.block", {
@@ -2359,157 +2439,86 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Block"
-                className={`input input-bordered w-full focus:outline-none ${errors.address_input?.block ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.address_input?.block)}
               />
-              {errors.address_input?.block && (
-                <span className="text-error text-sm">
-                  {errors.address_input.block.message}
-                </span>
-              )}
-            </div>
+            </Field>
 
-            {/* Ward Number - OPTIONAL */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-map text-sm"></i>
-                  Ward Number
-                </span>
-              </label>
+            <Field
+              icon="fa-map"
+              label="Ward Number"
+              error={errors.address_input?.ward_no}
+            >
               <input
                 type="number"
                 placeholder="Ward Number"
                 min={0}
-                className="input input-bordered w-full focus:outline-none"
+                className={inputCls(errors.address_input?.ward_no)}
                 {...register("address_input.ward_no")}
-                onKeyDown={(e) => {
-                  if (e.key === "-" || e.key === "e") e.preventDefault();
-                }}
-                onWheel={(e) => e.target.blur()}
+                onKeyDown={blockNegativeKeys}
+                onWheel={blurOnWheel}
               />
-            </div>
+            </Field>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mt-6">
-            {/* Zone - OPTIONAL */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-map-pin text-sm"></i>
-                  Zone
-                </span>
-              </label>
+          <div className={`${GRID_4} ${ROW}`}>
+            <Field
+              icon="fa-map-pin"
+              label="Zone"
+              error={errors.address_input?.zone_no}
+            >
               <input
                 type="number"
                 placeholder="Zone"
                 min={0}
-                className="input input-bordered w-full focus:outline-none"
+                className={inputCls(errors.address_input?.zone_no)}
                 {...register("address_input.zone_no")}
-                onKeyDown={(e) => {
-                  if (e.key === "-" || e.key === "e") e.preventDefault();
-                }}
-                onWheel={(e) => e.target.blur()}
+                onKeyDown={blockNegativeKeys}
+                onWheel={blurOnWheel}
               />
-            </div>
+            </Field>
 
-            {/* District - OPTIONAL */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-map text-sm"></i>
-                  District
-                </span>
-              </label>
+            <Field
+              icon="fa-map"
+              label="District"
+              error={errors.address_input?.district}
+            >
               <input
                 type="text"
                 {...register("address_input.district", {
                   maxLength: {
                     value: 50,
-                    message: "District cannot exceed 100 characters",
+                    message: "District cannot exceed 50 characters",
                   },
                 })}
                 placeholder="District"
-                className={`input input-bordered w-full focus:outline-none ${errors.address_input?.district ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.address_input?.district)}
               />
-              {errors.address_input?.district && (
-                <span className="text-error text-sm">
-                  {errors.address_input.district.message}
-                </span>
-              )}
-            </div>
+            </Field>
 
-            {/* City - OPTIONAL */}
-            <div className="form-control relative">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-city text-sm"></i>
-                  City
-                </span>
-              </label>
-              <div
-                className={`input input-bordered w-full flex items-center justify-between cursor-pointer ${errors.address_input?.city ? "input-error" : ""
-                  }`}
-                onClick={() => setShowCityDropdown(!showCityDropdown)}
-              >
-                <span className="text-gray-700 dark:text-gray-200">
-                  {selectedCityName || "Select City"}
-                </span>
-              </div>
+            <SearchSelect
+              icon="fa-city"
+              label="City"
+              required
+              placeholder="Select City"
+              options={sortedCities}
+              value={watch("address_input.city")}
+              registration={register("address_input.city", {
+                required: "City is required",
+              })}
+              error={errors.address_input?.city}
+              onSelect={(id) =>
+                setValue("address_input.city", id, {
+                  shouldValidate: true,
+                  shouldDirty: true,
+                })
+              }
+            />
 
-              {showCityDropdown && (
-                <div className="absolute z-10 bg-white dark:bg-[#242627] rounded w-full mt-1 shadow-lg border border-gray-300 dark:border-gray-600">
-                  <div className="p-2 sticky top-0 shadow-sm bg-white dark:bg-[#242627]">
-                    <input
-                      type="text"
-                      placeholder="Search City..."
-                      className="input input-bordered w-full focus:outline-none bg-white dark:bg-[#242627] text-gray-900 dark:text-gray-100 border border-gray-300 dark:border-gray-500"
-                      value={citySearchInput}
-                      onChange={(e) => setCitySearchInput(e.target.value)}
-                    />
-                  </div>
-                  <div className="max-h-40 overflow-y-auto">
-                    {filteredCities.length > 0 ? (
-                      filteredCities.map((city) => (
-                        <p
-                          key={city.id}
-                          className="p-2 hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer text-gray-800 dark:text-gray-200 capitalize"
-                          onClick={() => {
-                            setValue("address_input.city", city.id.toString(), {
-                              shouldValidate: true,
-                            });
-                            setSelectedCityName(city.name);
-                            setCitySearchInput("");
-                            setShowCityDropdown(false);
-                          }}
-                        >
-                          {city.name}
-                        </p>
-                      ))
-                    ) : (
-                      <p className="p-2 text-gray-500 dark:text-gray-400">
-                        No cities found
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-              {errors.address_input?.city && (
-                <span className="text-error text-sm">
-                  {errors.address_input.city.message}
-                </span>
-              )}
-            </div>
-
-            {/* Division - OPTIONAL */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-map-signs text-sm"></i>
-                  Division
-                </span>
-              </label>
+            <Field
+              icon="fa-map-signs"
+              label="Division"
+              error={errors.address_input?.division}
+            >
               <input
                 type="text"
                 {...register("address_input.division", {
@@ -2519,165 +2528,85 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Division"
-                className={`input input-bordered w-full focus:outline-none ${errors.address_input?.division ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.address_input?.division)}
               />
-              {errors.address_input?.division && (
-                <span className="text-error text-sm">
-                  {errors.address_input.division.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6 items-start">
-            {/* State - OPTIONAL */}
-            <div className="form-control relative">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-flag text-sm"></i> State
-                </span>
-              </label>
-              <div
-                className={`input input-bordered w-full flex items-center cursor-pointer py-2`}
-                onClick={() => setShowStateDropdown(!showStateDropdown)}
-              >
-                <span className="text-gray-700 dark:text-gray-200">
-                  {selectedStateName || "Select State"}
-                </span>
-              </div>
+          <div className={`${GRID_3} ${ROW} items-start`}>
+            <SearchSelect
+              icon="fa-flag"
+              label="State"
+              required
+              placeholder="Select State"
+              options={sortedStates}
+              value={watch("address_input.state")}
+              registration={register("address_input.state", {
+                required: "State is required",
+              })}
+              error={errors.address_input?.state}
+              onSelect={(id) =>
+                setValue("address_input.state", id, {
+                  shouldValidate: true,
+                  shouldDirty: true,
+                })
+              }
+            />
 
-              {showStateDropdown && (
-                <div className="absolute z-10 bg-white dark:bg-[#242627] rounded w-full mt-1 shadow-lg border border-gray-300 dark:border-gray-600">
-                  <div className="p-2 sticky top-0 shadow-sm bg-white dark:bg-[#242627]">
-                    <input
-                      type="text"
-                      placeholder="Search State..."
-                      className="input input-bordered w-full focus:outline-none bg-white dark:bg-[#242627] text-gray-900 dark:text-gray-100 border border-gray-300 dark:border-gray-500 py-1"
-                      value={stateSearchInput}
-                      onChange={(e) => setStateSearchInput(e.target.value)}
-                    />
-                  </div>
-                  <div className="max-h-40 overflow-y-auto">
-                    {filteredStates.length > 0 ? (
-                      filteredStates.map((state) => (
-                        <p
-                          key={state.id}
-                          className="p-2 hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer text-gray-800 dark:text-gray-200 capitalize"
-                          onClick={() => {
-                            setValue("address_input.state", state.id.toString(), {
-                              shouldValidate: true,
-                            });
-                            setSelectedStateName(state.name);
-                            setStateSearchInput("");
-                            setShowStateDropdown(false);
-                          }}
-                        >
-                          {state.name}
-                        </p>
-                      ))
-                    ) : (
-                      <p className="p-2 text-gray-500 dark:text-gray-400">
-                        No states found
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
+            <SearchSelect
+              icon="fa-globe"
+              label="Country"
+              required
+              placeholder="Select Country"
+              options={sortedCountries}
+              value={watch("address_input.country")}
+              registration={register("address_input.country", {
+                required: "Country is required",
+              })}
+              error={errors.address_input?.country}
+              onSelect={(id) =>
+                setValue("address_input.country", id, {
+                  shouldValidate: true,
+                  shouldDirty: true,
+                })
+              }
+            />
 
-            {/* Country - OPTIONAL */}
-            <div className="form-control relative">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-globe text-sm"></i> Country
-                </span>
-              </label>
-              <div
-                className={`input input-bordered w-full flex items-center cursor-pointer py-2`}
-                onClick={() => setShowCountryDropdown(!showCountryDropdown)}
-              >
-                <span className="text-gray-700 dark:text-gray-200">
-                  {selectedCountryName || "Select Country"}
-                </span>
-              </div>
-
-              {showCountryDropdown && (
-                <div className="absolute z-10 bg-white dark:bg-[#242627] rounded w-full mt-1 shadow-lg border border-gray-300 dark:border-gray-600">
-                  <div className="p-2 sticky top-0 shadow-sm bg-white dark:bg-[#242627]">
-                    <input
-                      type="text"
-                      placeholder="Search Country..."
-                      className="input input-bordered w-full focus:outline-none bg-white dark:bg-[#242627] text-gray-900 dark:text-gray-100 border border-gray-300 dark:border-gray-500 py-1"
-                      value={countrySearchInput}
-                      onChange={(e) => setCountrySearchInput(e.target.value)}
-                    />
-                  </div>
-                  <div className="max-h-40 overflow-y-auto">
-                    {filteredCountries.length > 0 ? (
-                      filteredCountries.map((country) => (
-                        <p
-                          key={country.id}
-                          className="p-2 hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer text-gray-800 dark:text-gray-200 capitalize"
-                          onClick={() => {
-                            setValue("address_input.country", country.id.toString(), {
-                              shouldValidate: true,
-                            });
-                            setSelectedCountryName(country.name);
-                            setCountrySearchInput("");
-                            setShowCountryDropdown(false);
-                          }}
-                        >
-                          {country.name}
-                        </p>
-                      ))
-                    ) : (
-                      <p className="p-2 text-gray-500 dark:text-gray-400">
-                        No countries found
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Pin Code - OPTIONAL with conditional validation */}
-            <div className="form-control flex flex-col justify-start relative">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-mailbox text-sm"></i> Pin Code
-                </span>
-              </label>
+            <Field
+              icon="fa-mailbox"
+              label="Pin Code"
+              error={errors.address_input?.area_code}
+            >
               <input
                 type="text"
+                inputMode="numeric"
+                maxLength={6}
                 {...register("address_input.area_code", {
                   validate: (value) => {
                     // Allow empty value
                     if (!value || value === "") return true;
                     // If filled, validate pattern
-                    return /^[1-9][0-9]{5}$/.test(value) || "Enter a valid 6-digit Indian Pincode";
-                  }
+                    return (
+                      /^[1-9][0-9]{5}$/.test(value) ||
+                      "Enter a valid 6-digit Indian Pincode"
+                    );
+                  },
                 })}
                 placeholder="Pin Code"
-                className={`input input-bordered w-full focus:outline-none py-2 ${errors.address_input?.area_code ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.address_input?.area_code)}
+                onInput={(e) => {
+                  e.target.value = e.target.value.replace(/\D/g, "");
+                }}
               />
-              {errors.address_input?.area_code && (
-                <span className="text-error text-sm mt-1">
-                  {errors.address_input.area_code.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
 
-          <div className="grid grid-cols-1 mt-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-location-dot text-sm"></i>
-                  Full Address Line
-                </span>
-              </label>
+          <div className={`grid grid-cols-1 ${ROW}`}>
+            <Field
+              icon="fa-location-dot"
+              label="Full Address Line"
+              error={errors.address_input?.address_line}
+            >
               <textarea
                 maxLength={250}
                 {...register("address_input.address_line", {
@@ -2687,31 +2616,24 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Full Address"
-                className={`textarea textarea-bordered w-full focus:outline-none ${errors.address_input?.address_line ? "textarea-error" : ""
-                  }`}
+                className={`textarea textarea-bordered w-full min-w-0 focus:outline-none ${
+                  errors.address_input?.address_line ? "textarea-error" : ""
+                }`}
               ></textarea>
-              {errors.address_input?.address_line && (
-                <span className="text-error text-sm">
-                  {errors.address_input.address_line.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
         </div>
-        {/* Bank Details Section */}
-        <div className="bg-base-200 p-6 rounded-box mb-6">
-          <h2 className="text-2xl font-bold mb-4">Bank Account Details</h2>
 
-          {/* Row 1: Account Holder Name & Bank Name */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Account Holder Name */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-user text-sm"></i>
-                  Account Holder Name
-                </span>
-              </label>
+        {/* ===================== Bank Details ===================== */}
+        <div className={SECTION}>
+          <h2 className={SECTION_TITLE}>Bank Account Details</h2>
+
+          <div className={GRID_2}>
+            <Field
+              icon="fa-user"
+              label="Account Holder Name"
+              error={errors.banking_detail_input?.holder_name}
+            >
               <input
                 type="text"
                 {...register("banking_detail_input.holder_name", {
@@ -2727,8 +2649,7 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Full Name as in Bank"
-                className={`input input-bordered w-full focus:outline-none ${errors.banking_detail_input?.holder_name ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.banking_detail_input?.holder_name)}
                 onInput={(e) => {
                   e.target.value = e.target.value
                     .replace(/[^A-Za-z\s]/g, "")
@@ -2736,122 +2657,105 @@ export const AdmissionForm = () => {
                     .replace(/^\s+/g, "");
                 }}
               />
-              {errors.banking_detail_input?.holder_name && (
-                <span className="text-error text-sm">
-                  {errors.banking_detail_input.holder_name.message}
-                </span>
-              )}
-            </div>
+            </Field>
 
-            {/* Bank Name */}
-            <div className="form-control relative" ref={bankInputRef}>
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-university text-sm"></i>
-                  Bank Name
-                </span>
-              </label>
+            <Field
+              icon="fa-university"
+              label="Bank Name"
+              error={errors.banking_detail_input?.bank_name}
+            >
+              <div className="relative" ref={bankInputRef}>
+                <input
+                  type="hidden"
+                  {...register("banking_detail_input.bank_name", {
+                    pattern: {
+                      value: /^\d+$/,
+                      message: "Invalid bank selection",
+                    },
+                  })}
+                />
 
-              <input
-                type="hidden"
-                {...register("banking_detail_input.bank_name", {
-                  validate: (v) => true, // allow empty
-                  pattern: {
-                    value: /^\d+$/,
-                    message: "Invalid bank selection",
-                  },
-                })}
-              />
+                <input
+                  type="text"
+                  value={bankQuery}
+                  placeholder="Bank Name"
+                  className={inputCls(errors.banking_detail_input?.bank_name)}
+                  onChange={handleBankInputChange}
+                  onFocus={() => {
+                    setFilteredBanks(bankNames);
+                    setShowDropdown(true);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      const raw = (bankQuery || "").trim();
+                      if (!raw) return;
 
-              <input
-                type="text"
-                value={bankQuery}
-                placeholder="Bank Name"
-                className={`input input-bordered w-full focus:outline-none ${errors.banking_detail_input?.bank_name ? "input-error" : ""
-                  }`}
-                onChange={handleBankInputChange}
-                onFocus={() => {
-                  setFilteredBanks(bankNames);
-                  setShowDropdown(true);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    const raw = (bankQuery || "").trim();
-                    if (!raw) return;
+                      const matched = bankNames.find(
+                        (b) => b.name.toLowerCase() === raw.toLowerCase()
+                      );
+                      matched ? handleSelectBank(matched) : handleCreateBank();
+                    }
+                    if (e.key === "Escape") setShowDropdown(false);
+                  }}
+                />
 
-                    const matched = bankNames.find(
-                      (b) => b.name.toLowerCase() === raw.toLowerCase()
-                    );
-                    matched ? handleSelectBank(matched) : handleCreateBank();
-                  }
-                  if (e.key === "Escape") setShowDropdown(false);
-                }}
-              />
-
-              {errors.banking_detail_input?.bank_name && (
-                <span className="text-error text-sm">
-                  {errors.banking_detail_input.bank_name.message}
-                </span>
-              )}
-
-              {showDropdown && (
-                <ul className="absolute z-20 w-full bg-white border border-gray-300 rounded mt-1 max-h-60 overflow-y-auto dark:bg-[#242627] dark:border-gray-600">
-                  {filteredBanks.length > 0 ? (
-                    filteredBanks.map((b) => (
-                      <li
-                        key={b.id}
-                        className="px-3 py-2 hover:bg-gray-200 cursor-pointer dark:hover:bg-gray-600 dark:text-gray-100"
-                        onClick={() => handleSelectBank(b)}
-                      >
-                        {b.name}
-                      </li>
-                    ))
-                  ) : (
-                    <li className="px-3 py-2 text-gray-500 dark:text-gray-400">
-                      No matches found
-                    </li>
-                  )}
-                  {bankQuery?.trim() &&
-                    !bankNames.some(
-                      (b) =>
-                        b.name.toLowerCase() === bankQuery.trim().toLowerCase()
-                    ) && (
-                      <li
-                        className="px-3 py-2 bg-green-50 hover:bg-green-100 cursor-pointer flex items-center gap-2 border-t dark:bg-green-900 dark:hover:bg-green-800 dark:text-gray-100"
-                        onClick={handleCreateBank}
-                      >
-                        {creatingBank ? (
-                          <i className="fa-solid fa-spinner fa-spin"></i>
-                        ) : (
-                          <i className="fa-solid fa-plus"></i>
-                        )}
-                        Add "{bankQuery.trim()}" as new bank
+                {showDropdown && (
+                  <ul className="absolute left-0 top-full z-20 w-full bg-white border border-gray-300 rounded mt-1 max-h-60 overflow-y-auto dark:bg-[#242627] dark:border-gray-600">
+                    {filteredBanks.length > 0 ? (
+                      filteredBanks.map((b) => (
+                        <li
+                          key={b.id}
+                          className="px-3 py-2 hover:bg-gray-200 cursor-pointer dark:hover:bg-gray-600 dark:text-gray-100 break-words"
+                          onClick={() => handleSelectBank(b)}
+                        >
+                          {b.name}
+                        </li>
+                      ))
+                    ) : (
+                      <li className="px-3 py-2 text-gray-500 dark:text-gray-400">
+                        No matches found
                       </li>
                     )}
-                </ul>
-              )}
+                    {bankQuery?.trim() &&
+                      !bankNames.some(
+                        (b) =>
+                          b.name.toLowerCase() ===
+                          bankQuery.trim().toLowerCase()
+                      ) && (
+                        <li
+                          className="px-3 py-2 bg-green-50 hover:bg-green-100 cursor-pointer flex items-center gap-2 border-t dark:bg-green-900 dark:hover:bg-green-800 dark:text-gray-100 break-words"
+                          onClick={handleCreateBank}
+                        >
+                          {creatingBank ? (
+                            <i className="fa-solid fa-spinner fa-spin"></i>
+                          ) : (
+                            <i className="fa-solid fa-plus"></i>
+                          )}
+                          Add "{bankQuery.trim()}" as new bank
+                        </li>
+                      )}
+                  </ul>
+                )}
+              </div>
 
               {!!createBankError && (
                 <span className="text-error text-sm mt-1">
                   {createBankError}
                 </span>
               )}
-            </div>
+            </Field>
           </div>
 
-          {/* Row 2: Account Number & IFSC Code */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-            {/* Account Number */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-credit-card text-sm"></i>
-                  Account Number
-                </span>
-              </label>
+          <div className={`${GRID_2} ${ROW}`}>
+            <Field
+              icon="fa-credit-card"
+              label="Account Number"
+              error={errors.banking_detail_input?.account_no}
+            >
               <input
                 type="text"
+                inputMode="numeric"
                 {...register("banking_detail_input.account_no", {
                   pattern: {
                     value: /^[0-9]{9,18}$/,
@@ -2859,27 +2763,18 @@ export const AdmissionForm = () => {
                   },
                 })}
                 placeholder="Account Number"
-                className={`input input-bordered w-full focus:outline-none ${errors.banking_detail_input?.account_no ? "input-error" : ""
-                  }`}
+                className={inputCls(errors.banking_detail_input?.account_no)}
                 onInput={(e) => {
                   e.target.value = e.target.value.replace(/[^0-9]/g, "");
                 }}
               />
-              {errors.banking_detail_input?.account_no && (
-                <span className="text-error text-sm">
-                  {errors.banking_detail_input.account_no.message}
-                </span>
-              )}
-            </div>
+            </Field>
 
-            {/* IFSC Code */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-code text-sm"></i>
-                  IFSC Code
-                </span>
-              </label>
+            <Field
+              icon="fa-code"
+              label="IFSC Code"
+              error={errors.banking_detail_input?.ifsc_code}
+            >
               <input
                 type="text"
                 {...register("banking_detail_input.ifsc_code", {
@@ -2888,9 +2783,8 @@ export const AdmissionForm = () => {
                     message: "Invalid IFSC code format",
                   },
                 })}
-                placeholder=" eg: SBIN0001234 or BARB0BHOPAL"
-                className={`input input-bordered w-full focus:outline-none ${errors.banking_detail_input?.ifsc_code ? "input-error" : ""
-                  }`}
+                placeholder="eg: SBIN0001234 or BARB0BHOPAL"
+                className={inputCls(errors.banking_detail_input?.ifsc_code)}
                 onInput={(e) => {
                   e.target.value = e.target.value
                     .toUpperCase()
@@ -2898,75 +2792,74 @@ export const AdmissionForm = () => {
                 }}
                 maxLength={11}
               />
-              {errors.banking_detail_input?.ifsc_code && (
-                <span className="text-error text-sm">
-                  {errors.banking_detail_input.ifsc_code.message}
-                </span>
-              )}
-            </div>
+            </Field>
           </div>
         </div>
 
         {/* Submit Button */}
-        <div className="flex justify-center mt-10">
-          <button type="submit" className="btn bgTheme text-white w-40">
-            {loading ? (
-              <i className="fa-solid fa-spinner fa-spin mr-2"></i>
+        <div className="flex justify-center mt-8 sm:mt-10">
+          <button
+            type="submit"
+            disabled={submitting}
+            className="btn bgTheme text-white w-full sm:w-40"
+          >
+            {submitting ? (
+              <i className="fa-solid fa-spinner fa-spin"></i>
             ) : (
-              <i className="fa-solid fa-paper-plane mr-2"></i>
+              <>
+                <i className="fa-solid fa-paper-plane mr-2"></i>
+                Register
+              </>
             )}
-            {loading ? "" : "Register"}
           </button>
         </div>
       </form>
+
       {showAdmissionSuccessModal && (
         <AdmissionSuccessful
           handleCloseOnly={handleCloseOnly}
           handleCloseAndNavigate={handleCloseAndNavigate}
         />
       )}
-      {/* Modal */}
-      {showAlert && (
-        <dialog open className="modal modal-open">
-          <div className="modal-box dark:bg-gray-800 dark:text-gray-100">
-            <h3 className="font-bold text-lg">Admission Form</h3>
-            <p className="py-4">{alertMessage}</p>
-            <div className="modal-action">
-              <button
-                className="btn bgTheme text-white w-30"
-                onClick={() => setShowAlert(false)}
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </dialog>
-      )}
 
       {/* ================= Bulk Upload Modal ================= */}
-      {showBulkUploadModal && (
+      {showBulkUploadModal && !bulkMinimized && (
         <div className="modal modal-open">
-          <div className="modal-box dark:bg-gray-800 dark:text-gray-100 w-11/12 max-w-2xl max-h-[92vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="font-bold text-lg sm:text-xl">
+          <div className="modal-box dark:bg-gray-800 dark:text-gray-100 w-11/12 max-w-2xl max-h-[92vh] overflow-y-auto p-4 sm:p-6">
+            <div className="flex justify-between items-center gap-2 mb-4">
+              <h3 className="font-bold text-lg sm:text-xl min-w-0">
                 Bulk Upload Admission Data
               </h3>
-              <button
-                type="button"
-                onClick={handleCloseBulkUploadModal}
-                className="btn btn-sm btn-circle btn-ghost"
-              >
-                ✕
-              </button>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                {bulkUploadLoading && (
+                  <button
+                    type="button"
+                    onClick={() => setBulkMinimized(true)}
+                    className="btn btn-sm btn-circle btn-ghost"
+                    aria-label="Minimize"
+                    title="Minimize - keep working while the upload runs"
+                  >
+                    <i className="fa-solid fa-minus"></i>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleCloseBulkUploadModal}
+                  className="btn btn-sm btn-circle btn-ghost"
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
 
             <div className="space-y-4 mt-2">
               {/* ---- General error (validation / network / job failed) ---- */}
               {bulkUploadError && (
-                <div className="bg-red-50 border border-red-300 rounded-lg p-4 dark:bg-red-900/20 dark:border-red-800">
+                <div className="bg-red-50 border border-red-300 rounded-lg p-3 sm:p-4 dark:bg-red-900/20 dark:border-red-800">
                   <div className="flex items-start gap-3">
                     <i className="fa-solid fa-circle-exclamation text-red-600 dark:text-red-400 text-lg mt-0.5"></i>
-                    <p className="text-sm font-medium text-red-800 dark:text-red-300 break-words">
+                    <p className="text-sm font-medium text-red-800 dark:text-red-300 break-words min-w-0">
                       {bulkUploadError}
                     </p>
                   </div>
@@ -2975,10 +2868,10 @@ export const AdmissionForm = () => {
 
               {/* ---- Success ---- */}
               {bulkUploadSuccess && (
-                <div className="bg-green-50 border border-green-300 rounded-lg p-4 dark:bg-green-900/20 dark:border-green-800">
+                <div className="bg-green-50 border border-green-300 rounded-lg p-3 sm:p-4 dark:bg-green-900/20 dark:border-green-800">
                   <div className="flex items-start gap-3">
                     <i className="fa-solid fa-circle-check text-green-600 dark:text-green-400 text-lg mt-0.5"></i>
-                    <p className="font-semibold text-green-800 dark:text-green-300">
+                    <p className="font-semibold text-green-800 dark:text-green-300 break-words min-w-0">
                       {bulkUploadSuccess}
                     </p>
                   </div>
@@ -2989,7 +2882,7 @@ export const AdmissionForm = () => {
               {bulkUploadResult && (
                 <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
                   <div className="grid grid-cols-3 text-center bg-base-200">
-                    <div className="p-3">
+                    <div className="p-2 sm:p-3">
                       <p className="text-xs text-gray-500 dark:text-gray-400">
                         Total rows
                       </p>
@@ -2997,7 +2890,7 @@ export const AdmissionForm = () => {
                         {bulkUploadResult.total}
                       </p>
                     </div>
-                    <div className="p-3">
+                    <div className="p-2 sm:p-3">
                       <p className="text-xs text-gray-500 dark:text-gray-400">
                         Created
                       </p>
@@ -3005,7 +2898,7 @@ export const AdmissionForm = () => {
                         {bulkUploadResult.created}
                       </p>
                     </div>
-                    <div className="p-3">
+                    <div className="p-2 sm:p-3">
                       <p className="text-xs text-gray-500 dark:text-gray-400">
                         Failed
                       </p>
@@ -3033,7 +2926,7 @@ export const AdmissionForm = () => {
                         {Object.entries(bulkErrorsBySheet).map(
                           ([sheet, items]) => (
                             <div key={sheet}>
-                              <p className="text-xs font-bold uppercase tracking-wide text-red-700 dark:text-red-300 mb-1">
+                              <p className="text-xs font-bold uppercase tracking-wide text-red-700 dark:text-red-300 mb-1 break-words">
                                 {sheet}
                               </p>
                               <ul className="space-y-1">
@@ -3065,8 +2958,8 @@ export const AdmissionForm = () => {
 
               {/* ---- Progress while the job runs ---- */}
               {bulkUploadLoading && bulkUploadProgress && (
-                <div className="bg-base-200 rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-2">
+                <div className="bg-base-200 rounded-lg p-3 sm:p-4">
+                  <div className="flex items-center justify-between gap-2 mb-2">
                     <p className="text-sm font-semibold flex items-center gap-2">
                       <i className="fa-solid fa-spinner fa-spin"></i>
                       {bulkUploadProgress.stage === "uploading"
@@ -3097,12 +2990,11 @@ export const AdmissionForm = () => {
                 </div>
               )}
 
-              {/* ---- File + school year (hidden while a job is running or after a clean success) ---- */}
+              {/* ---- File + school year ---- */}
               {!bulkUploadSuccess && (
                 <div className="space-y-6">
-                  {/* Upload Section */}
                   <div
-                    className={`border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 sm:p-8 text-center ${
+                    className={`border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-4 sm:p-8 text-center ${
                       bulkUploadLoading ? "opacity-50 pointer-events-none" : ""
                     }`}
                   >
@@ -3130,9 +3022,11 @@ export const AdmissionForm = () => {
 
                           if (
                             !validTypes.includes(file.type) &&
-                            !file.name.match(/\.(xlsx|xls)$/i)
+                            !file.name.match(/\.(xlsx|xls|csv)$/i)
                           ) {
-                            setBulkUploadError("Please upload Excel");
+                            setBulkUploadError(
+                              "Please upload an Excel (.xlsx, .xls) or CSV file"
+                            );
                             return;
                           }
 
@@ -3155,7 +3049,7 @@ export const AdmissionForm = () => {
                     </div>
 
                     {bulkUploadFile && (
-                      <div className="mt-4 p-4 bg-base-200 rounded-lg flex items-center justify-between gap-3">
+                      <div className="mt-4 p-3 sm:p-4 bg-base-200 rounded-lg flex items-center justify-between gap-3">
                         <div className="min-w-0 text-left">
                           <p className="font-medium truncate">
                             {bulkUploadFile.name}
@@ -3168,7 +3062,8 @@ export const AdmissionForm = () => {
                         <button
                           type="button"
                           onClick={() => setBulkUploadFile(null)}
-                          className="btn btn-sm btn-ghost text-error"
+                          className="btn btn-sm btn-ghost text-error flex-shrink-0"
+                          aria-label="Remove file"
                         >
                           <i className="fa-solid fa-trash"></i>
                         </button>
@@ -3176,7 +3071,6 @@ export const AdmissionForm = () => {
                     )}
                   </div>
 
-                  {/* School Year Section */}
                   <div className="form-control">
                     <label className="label">
                       <span className="label-text flex items-center gap-2">
@@ -3186,7 +3080,7 @@ export const AdmissionForm = () => {
                     </label>
 
                     <select
-                      className="select select-bordered w-full focus:outline-none cursor-pointer"
+                      className={selectCls()}
                       value={bulkUploadSchoolYear}
                       disabled={bulkUploadLoading}
                       onChange={(e) => setBulkUploadSchoolYear(e.target.value)}
@@ -3213,7 +3107,7 @@ export const AdmissionForm = () => {
 
               {/* Preview Info */}
               {bulkUploadFile && !bulkUploadLoading && !bulkUploadSuccess && (
-                <div className="bg-base-200 p-4 rounded-lg">
+                <div className="bg-base-200 p-3 sm:p-4 rounded-lg">
                   <h4 className="font-semibold mb-2 flex items-center gap-2">
                     <i className="fa-solid fa-eye"></i>
                     Upload Preview
@@ -3232,14 +3126,22 @@ export const AdmissionForm = () => {
               <div className="modal-action flex-col-reverse sm:flex-row gap-2">
                 <button
                   type="button"
-                  className="btn btn-ghost w-full sm:w-auto"
-                  onClick={handleCloseBulkUploadModal}
+                  className="btn btn-outline w-full sm:w-auto"
+                  onClick={
+                    bulkUploadLoading
+                      ? () => setBulkMinimized(true) // keep the job running
+                      : handleCloseBulkUploadModal
+                  }
                 >
-                  {bulkUploadLoading
-                    ? "Stop Watching"
-                    : bulkUploadResult || bulkUploadSuccess
-                    ? "Close"
-                    : "Cancel"}
+                  {bulkUploadLoading ? (
+                    <>
+                      Stop watching
+                    </>
+                  ) : bulkUploadResult || bulkUploadSuccess ? (
+                    "Close"
+                  ) : (
+                    "Cancel"
+                  )}
                 </button>
 
                 {!bulkUploadSuccess && (
@@ -3268,6 +3170,89 @@ export const AdmissionForm = () => {
                 )}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= Minimised bulk upload card ================= */}
+      {showBulkUploadModal && bulkMinimized && (
+        <div
+          className="fixed bottom-20 md:bottom-4 right-3 sm:right-4 z-50 w-[calc(100vw-1.5rem)] max-w-xs rounded-box border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex items-stretch">
+            <button
+              type="button"
+              onClick={() => setBulkMinimized(false)}
+              className="flex-1 min-w-0 p-3 text-left"
+              aria-label="Open bulk upload"
+              title="Click to expand"
+            >
+              {bulkUploadLoading ? (
+                <>
+                  <p className="text-sm font-semibold flex items-center gap-2">
+                    <i className="fa-solid fa-spinner fa-spin"></i>
+                    <span className="truncate">Bulk upload in progress</span>
+                    {bulkUploadProgress?.total > 0 && (
+                      <span className="ml-auto text-xs font-medium">
+                        {bulkPercent}%
+                      </span>
+                    )}
+                  </p>
+                  {bulkUploadProgress?.total > 0 ? (
+                    <progress
+                      className="progress progress-primary w-full mt-2"
+                      value={bulkUploadProgress.processed}
+                      max={bulkUploadProgress.total}
+                    ></progress>
+                  ) : (
+                    <progress className="progress progress-primary w-full mt-2"></progress>
+                  )}
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    {bulkUploadProgress?.total > 0
+                      ? `${bulkUploadProgress.processed} of ${bulkUploadProgress.total} rows`
+                      : bulkUploadProgress?.stage === "uploading"
+                      ? "Uploading file..."
+                      : "Starting..."}
+                  </p>
+                </>
+              ) : bulkUploadResult ? (
+                bulkUploadResult.failed > 0 ? (
+                  <p className="text-sm font-semibold text-red-600 dark:text-red-400 flex items-center gap-2">
+                    <i className="fa-solid fa-triangle-exclamation"></i>
+                    <span>
+                      {bulkUploadResult.failed} of {bulkUploadResult.total} rows
+                      failed. Click to view.
+                    </span>
+                  </p>
+                ) : (
+                  <p className="text-sm font-semibold text-green-600 dark:text-green-400 flex items-center gap-2">
+                    <i className="fa-solid fa-circle-check"></i>
+                    <span>
+                      Bulk upload complete: {bulkUploadResult.created} created
+                    </span>
+                  </p>
+                )
+              ) : (
+                <p className="text-sm font-semibold text-red-600 dark:text-red-400 flex items-center gap-2">
+                  <i className="fa-solid fa-circle-exclamation"></i>
+                  <span>Bulk upload failed. Click to view.</span>
+                </p>
+              )}
+            </button>
+
+            {/* Dismiss only once the job has finished */}
+            {!bulkUploadLoading && (
+              <button
+                type="button"
+                onClick={handleCloseBulkUploadModal}
+                className="px-3 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200"
+                aria-label="Dismiss"
+              >
+                ✕
+              </button>
+            )}
           </div>
         </div>
       )}
