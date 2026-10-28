@@ -1982,3 +1982,46 @@ export const fetchSubjectsByYearLevel = async (yearLevelId) => {
     throw err;
   }
 };
+
+
+export const updateEvent = async (id, eventData) => {
+  try {
+    const response = await axios.patch(`${BASE_URL}/a/events/${id}/`, eventData, {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+    return response.data;
+  } catch (error) {
+    if (error.response) {
+      throw new Error(
+        error.response.data?.message ||
+          error.response.data?.detail ||
+          "Failed to update event",
+      );
+    } else if (error.request) {
+      throw new Error("No response received from server");
+    } else {
+      throw new Error(error.message || "Failed to update event");
+    }
+  }
+};
+
+export const deleteEvent = async (id) => {
+  try {
+    await axios.delete(`${BASE_URL}/a/events/${id}/`);
+    return true;
+  } catch (error) {
+    if (error.response) {
+      throw new Error(
+        error.response.data?.message ||
+          error.response.data?.detail ||
+          "Failed to delete event",
+      );
+    } else if (error.request) {
+      throw new Error("No response received from server");
+    } else {
+      throw new Error(error.message || "Failed to delete event");
+    }
+  }
+};
