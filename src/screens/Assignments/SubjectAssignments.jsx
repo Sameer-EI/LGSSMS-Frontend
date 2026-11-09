@@ -38,6 +38,66 @@ const DAYS = [
   "Saturday",
 ];
 
+/* ------------------------- timetable tags ------------------------- */
+// Tags are stored by the backend as a bracket prefix inside ClassPeriod.name
+// (e.g. "[Boys] Chemistry - Class 10", "[Girls][PCM] Physics - Class 12").
+
+const COMBINED = "Combined";
+
+const TAGS_COMBINED = [{ value: COMBINED, label: "Combined" }];
+const TAGS_GENDER = [
+  { value: "Boys", label: "Boys" },
+  { value: "Girls", label: "Girls" },
+];
+// Class 11-12 also pick a stream. It is sent as its own `stream` param,
+// never merged into `tag`.
+const STREAMS = ["PCM", "PCB", "ARTS", "COMM"];
+const STREAM_SET = new Set(STREAMS);
+
+// Nursery / KG-1 -> Combined, KG-2 & Class 1-10 -> Boys|Girls,
+// Class 11-12 -> Boys|Girls + stream
+const getTagConfig = (levelName = "") => {
+  const n = String(levelName).trim().toLowerCase();
+  const num = parseInt((n.match(/\d+/) || [])[0], 10);
+
+  if (/nursery/.test(n)) return { tags: TAGS_COMBINED, streams: [] };
+  if (/kg|kindergarten/.test(n))
+    return { tags: num === 2 ? TAGS_GENDER : TAGS_COMBINED, streams: [] };
+  if (!Number.isNaN(num)) {
+    if (num >= 11) return { tags: TAGS_GENDER, streams: STREAMS };
+    if (num >= 1) return { tags: TAGS_GENDER, streams: [] };
+  }
+  return { tags: TAGS_COMBINED, streams: [] }; // unknown names -> untagged
+};
+
+// "Combined" is only a GET filter; saves/clears for it are sent untagged
+const writeTag = (tag) => (tag === COMBINED ? "" : tag || "");
+
+// Splits a raw tag into { tag, stream }.
+// Accepts "[Girls][PCM]", "Girls - PCM", "Girls", or a tag plus a separate
+// stream value coming from the API.
+const parseTagStream = (rawTag, rawStream) => {
+  const text = String(rawTag || "");
+  const bracketed = [...text.matchAll(/\[(.*?)\]/g)].map((m) => m[1].trim());
+  const tokens = (bracketed.length ? bracketed : text.split(/\s*[-·|,]\s*/))
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  let tag = tokens.find((t) => /^(boys?|girls?|combined)$/i.test(t)) || "";
+  if (!tag && tokens[0] && !STREAM_SET.has(tokens[0].toUpperCase())) {
+    tag = tokens[0];
+  }
+  const stream =
+    String(rawStream || "").trim() ||
+    tokens.find((t) => STREAM_SET.has(t.toUpperCase())) ||
+    "";
+
+  return {
+    tag: tag ? tag[0].toUpperCase() + tag.slice(1).toLowerCase() : "",
+    stream: stream.toUpperCase(),
+  };
+};
+
 /* ------------------------------ helpers ------------------------------ */
 
 // Local date as YYYY-MM-DD (toISOString() would give the UTC date, which can
@@ -181,7 +241,7 @@ const buildGrid = (timetable) => {
         periodMap.set(p.period_index, {
           id: p.period_index,
           name: p.period_name,
-          time_range: p.time_range,
+          time_range: p.time_range || p.time,
         });
       }
     });
@@ -242,9 +302,55 @@ const Legend = () => (
   </div>
 );
 
+// Label above a filter control
+const FilterField = ({ label, className = "", children }) => (
+  <div className={`flex flex-col gap-1 ${className}`}>
+    <span className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-200">
+      {label}
+    </span>
+    {children}
+  </div>
+);
+
+/* ------------------------- tag + stream badges ------------------------- */
+
+const TAG_BADGE = {
+  Boys: "bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/40 dark:text-blue-300 dark:border-blue-700",
+  Girls:
+    "bg-pink-100 text-pink-700 border-pink-200 dark:bg-pink-900/40 dark:text-pink-300 dark:border-pink-700",
+  Combined:
+    "bg-gray-100 text-gray-600 border-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:border-gray-600",
+};
+const STREAM_BADGE =
+  "bg-purple-100 text-purple-700 border-purple-200 dark:bg-purple-900/40 dark:text-purple-300 dark:border-purple-700";
+
+const BADGE_BASE =
+  "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] sm:text-[11px] font-semibold leading-none";
+
+const TagBadges = ({ tag, stream }) => {
+  const t = parseTagStream(tag, stream);
+  if (!t.tag && !t.stream) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center justify-center gap-1">
+      {t.tag && (
+        <span
+          className={`${BADGE_BASE} ${TAG_BADGE[t.tag] || TAG_BADGE.Combined}`}
+        >
+          {t.tag}
+        </span>
+      )}
+      {t.stream && (
+        <span className={`${BADGE_BASE} tracking-wide ${STREAM_BADGE}`}>
+          {t.stream}
+        </span>
+      )}
+    </div>
+  );
+};
+
 /**
  * Presentational grid shared by both views.
- * getCell(day, periodIndex) -> { primary, secondary, note?, status } | null
+ * getCell(day, periodIndex) -> { primary, secondary, note?, tag?, stream?, status } | null
  * onCellClick(day, periodIndex) is optional: only the classwise view passes it.
  */
 const TimetableGrid = ({
@@ -323,6 +429,9 @@ const TimetableGrid = ({
                           {cell.secondary}
                         </div>
                       )}
+                      {(cell.tag || cell.stream) && (
+                        <TagBadges tag={cell.tag} stream={cell.stream} />
+                      )}
                       {cell.note && (
                         <div
                           className={`mt-0.5 text-[10px] sm:text-[11px] break-words ${tc.note}`}
@@ -376,6 +485,8 @@ export const SubjectAssignments = () => {
 
   // filters
   const [selectedClassId, setSelectedClassId] = useState("");
+  const [selectedTag, setSelectedTag] = useState(""); // Boys / Girls ("" = class default)
+  const [selectedStream, setSelectedStream] = useState(""); // PCM / PCB / ARTS / COMM (Class 11-12)
   const [selectedTeacherId, setSelectedTeacherId] = useState("");
   const [selectedSchoolYear, setSelectedSchoolYear] = useState("");
 
@@ -426,6 +537,36 @@ export const SubjectAssignments = () => {
     () => new Map(teachers.map((t) => [t.id, teacherName(t)])),
     [teachers]
   );
+
+  /* ---- tag (Boys / Girls) + stream (Class 11-12) derived from the class ---- */
+  const selectedClass = useMemo(
+    () => yearLevels.find((y) => String(y.id) === selectedClassId),
+    [yearLevels, selectedClassId]
+  );
+  const tagConfig = useMemo(
+    () => getTagConfig(selectedClass?.level_name),
+    [selectedClass]
+  );
+  const tagOptions = tagConfig.tags;
+  const streams = tagConfig.streams;
+  // Fall back to the class defaults whenever the stored choice isn't valid for
+  // it, so changing class never fires a fetch with a stale tag.
+  const activeGender = tagOptions.some((o) => o.value === selectedTag)
+    ? selectedTag
+    : tagOptions[0].value;
+  const activeStream = streams.length
+    ? streams.includes(selectedStream)
+      ? selectedStream
+      : streams[0]
+    : "";
+  // sent to the API separately: tag = "Boys" | "Girls" | "Combined",
+  // stream = "PCM" | "PCB" | "ARTS" | "COMM" | ""
+  const activeTag = activeGender;
+  const showTag = activeGender !== COMBINED;
+  // text for headings, e.g. "Boys", "Boys · PCM"
+  const activeTagLabel = [showTag ? activeGender : "", activeStream]
+    .filter(Boolean)
+    .join(" · ");
 
   /* ---- initial load ---- */
   useEffect(() => {
@@ -486,7 +627,7 @@ export const SubjectAssignments = () => {
       try {
         const data =
           viewMode === "classwise"
-            ? await fetchClassTimetable(activeId, targetDate)
+            ? await fetchClassTimetable(activeId, targetDate, activeTag, activeStream)
             : await fetchTeacherTimetable(activeId, targetDate);
         if (!cancelled) setTimetable(data);
       } catch (err) {
@@ -504,7 +645,7 @@ export const SubjectAssignments = () => {
     return () => {
       cancelled = true;
     };
-  }, [viewMode, activeId, targetDate, refreshKey]);
+  }, [viewMode, activeId, targetDate, refreshKey, activeTag, activeStream]);
 
   /* ---- grid data built from the API response ---- */
   const grid = useMemo(() => buildGrid(timetable), [timetable]);
@@ -610,10 +751,14 @@ export const SubjectAssignments = () => {
       p.teacher?.name ||
       teacherMap.get(Number(p.teacher_id ?? p.teacher?.id)) ||
       "";
-    return { primary: p.subject, secondary: normalTeacher, status: "normal" };
+    return {
+      primary: p.subject,
+      secondary: normalTeacher,
+      status: "normal",
+    };
   };
 
-  // Teacher workload cell: class + subject.
+  // Teacher workload cell: class + subject, with tag / stream badges.
   // Substitute duty shows as an "arrangement" (green) cell.
   const getTeacherCell = (day, periodIndex) => {
     const p = getPeriod(day, periodIndex);
@@ -628,6 +773,8 @@ export const SubjectAssignments = () => {
     return {
       primary: p.class_name || p.subject,
       secondary: p.class_name ? p.subject : "",
+      tag: p.tag, // from /t/teacher-workload/
+      stream: p.stream, // Class 11-12 only (also parsed out of tag if combined)
       note: p.is_substitute_duty ? "Arrangement" : undefined,
       status: p.is_substitute_duty ? "arrangement" : "normal",
     };
@@ -636,7 +783,8 @@ export const SubjectAssignments = () => {
   /* ---- headings ---- */
   const selectedClassName =
     timetable?.year_level_name ||
-    yearLevels.find((y) => String(y.id) === selectedClassId)?.level_name ||
+    timetable?.year_level?.name ||
+    selectedClass?.level_name ||
     "";
 
   const selectedTeacherName =
@@ -893,6 +1041,8 @@ export const SubjectAssignments = () => {
         period_index: m.periodIndex,
         subject_id: Number(m.subjectId),
         teacher_id: Number(m.teacherId),
+        tag: writeTag(activeTag), // Boys / Girls ("" for Combined)
+        stream: activeStream, // PCM / PCB / ARTS / COMM ("" below Class 11)
       });
       setEditModal(null);
       setAlertMessage(res?.message || "Period saved successfully!");
@@ -926,6 +1076,8 @@ export const SubjectAssignments = () => {
         year_level_id: Number(selectedClassId),
         day_of_week: m.day,
         period_index: m.periodIndex,
+        tag: writeTag(activeTag), // clearing Boys never clears Girls
+        stream: activeStream,
       });
       setEditModal(null);
       setAlertMessage(res?.message || "Period assignment removed.");
@@ -978,67 +1130,114 @@ export const SubjectAssignments = () => {
         className="w-full max-w-7xl mx-auto p-3 sm:p-6 bg-white dark:bg-gray-800 rounded-box shadow-sm"
       >
         {/* ---------- Filters row ---------- */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center pb-4 border-b border-gray-200 dark:border-gray-700">
-          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center flex-1">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end pb-4 border-b border-gray-200 dark:border-gray-700">
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end flex-1">
             {/* View mode */}
-            <select
-              value={viewMode}
-              onChange={(e) => setViewMode(e.target.value)}
-              className={selectCls}
-            >
-              {VIEW_MODES.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
+            <FilterField label="View">
+              <select
+                value={viewMode}
+                onChange={(e) => setViewMode(e.target.value)}
+                className={selectCls}
+              >
+                {VIEW_MODES.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </FilterField>
 
-            {/* Year level (classwise) OR teacher (workload) */}
             {viewMode === "classwise" ? (
-              <select
-                value={selectedClassId}
-                onChange={(e) => setSelectedClassId(e.target.value)}
-                className={selectCls}
-              >
-                {yearLevels.map((y) => (
-                  <option key={y.id} value={y.id}>
-                    {y.level_name}
-                  </option>
-                ))}
-              </select>
+              <>
+                <FilterField label="Year Level / Class">
+                  <select
+                    value={selectedClassId}
+                    onChange={(e) => {
+                      setSelectedClassId(e.target.value);
+                      setSelectedTag(""); // reset to the new class's defaults
+                      setSelectedStream("");
+                    }}
+                    className={selectCls}
+                  >
+                    {yearLevels.map((y) => (
+                      <option key={y.id} value={y.id}>
+                        {y.level_name}
+                      </option>
+                    ))}
+                  </select>
+                </FilterField>
+
+                <FilterField label="Tag">
+                  <select
+                    value={activeGender}
+                    onChange={(e) => setSelectedTag(e.target.value)}
+                    disabled={tagOptions.length === 1}
+                    className={selectCls}
+                  >
+                    {tagOptions.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </FilterField>
+
+                {/* Stream only exists for Class 11-12 */}
+                {streams.length > 0 && (
+                  <FilterField label="Stream">
+                    <select
+                      value={activeStream}
+                      onChange={(e) => setSelectedStream(e.target.value)}
+                      className={selectCls}
+                    >
+                      {streams.map((st) => (
+                        <option key={st} value={st}>
+                          {st}
+                        </option>
+                      ))}
+                    </select>
+                  </FilterField>
+                )}
+              </>
             ) : (
-              <select
-                value={selectedTeacherId}
-                onChange={(e) => setSelectedTeacherId(e.target.value)}
-                className={selectCls}
-              >
-                {teachers.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {teacherOptionLabel(t)}
-                  </option>
-                ))}
-              </select>
+              <FilterField label="Teacher">
+                <select
+                  value={selectedTeacherId}
+                  onChange={(e) => setSelectedTeacherId(e.target.value)}
+                  className={selectCls}
+                >
+                  {teachers.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {teacherOptionLabel(t)}
+                    </option>
+                  ))}
+                </select>
+              </FilterField>
             )}
           </div>
 
           {/* School year */}
-          <select
-            value={selectedSchoolYear}
-            onChange={(e) => setSelectedSchoolYear(e.target.value)}
-            className={`${selectCls} sm:ml-auto`}
-          >
-            {schoolYears.map((year) => (
-              <option key={year} value={year}>
-                {year}
-              </option>
-            ))}
-          </select>
+          <FilterField label="School Year" className="sm:ml-auto">
+            <select
+              value={selectedSchoolYear}
+              onChange={(e) => setSelectedSchoolYear(e.target.value)}
+              className={selectCls}
+            >
+              {schoolYears.map((year) => (
+                <option key={year} value={year}>
+                  {year}
+                </option>
+              ))}
+            </select>
+          </FilterField>
         </div>
         {/* ---------- Heading + legend ---------- */}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mt-6 mb-3">
           <h2 className="text-lg sm:text-xl font-bold textTheme">
             {viewMode === "classwise" ? (
-              `Schedule: ${selectedClassName}`
+              `Schedule: ${selectedClassName}${
+                showTag && activeTagLabel ? ` (${activeTagLabel})` : ""
+              }`
             ) : (
               <>
                 {`Teacher Schedule: ${selectedTeacherName}`}
@@ -1121,8 +1320,9 @@ export const SubjectAssignments = () => {
             </div>
 
             <div className="mt-4 px-4 py-3 rounded-lg bg-purple-50 dark:bg-gray-700 text-sm textTheme">
-              <b>Class:</b> {selectedClassName} | <b>Slot:</b> {editModal.day},{" "}
-              {renderPeriodName(editModal.periodName)}
+              <b>Class:</b> {selectedClassName}
+              {showTag && activeTagLabel ? ` (${activeTagLabel})` : ""} |{" "}
+              <b>Slot:</b> {editModal.day}, {renderPeriodName(editModal.periodName)}
             </div>
 
             <div className="mt-4">

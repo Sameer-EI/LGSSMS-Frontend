@@ -123,7 +123,7 @@ export const Login = () => {
             redirectPath = allRouterLink.studentDashboard;
             break;
           default:
-            redirectPath = allRouterLink.login; // fallback
+            redirectPath = allRouterLink.loginUser; // fallback
         }
 
         navigate(redirectPath, { replace: true, state: { showSuccess: true } });

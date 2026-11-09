@@ -307,9 +307,20 @@ const formatSubmitErrors = (err) => {
 };
 
 // Label + control + error message.
+// - Required fields show a red *.
+// - Every other field shows a small "(Optional)" tag next to the label, so the
+//   placeholder inside the input stays clean (pass showOptional={false} to hide it).
 // When `error` is set the wrapper gets data-invalid (used for scroll-to-error)
 // and every input/select/textarea inside gets a red border.
-const Field = ({ icon, label, required, error, className = "", children }) => (
+const Field = ({
+  icon,
+  label,
+  required,
+  showOptional = true,
+  error,
+  className = "",
+  children,
+}) => (
   <div
     data-invalid={error ? "true" : undefined}
     className={`form-control min-w-0 ${className} ${
@@ -319,9 +330,18 @@ const Field = ({ icon, label, required, error, className = "", children }) => (
     }`}
   >
     <label className="label">
-      <span className="label-text flex items-center gap-2">
+      <span className="label-text flex flex-wrap items-center gap-x-2 gap-y-0.5">
         <i className={`fa-solid ${icon} text-sm`}></i>
-        {label} {required && <span className="text-error">*</span>}
+        <span>{label}</span>
+        {required ? (
+          <span className="text-error">*</span>
+        ) : (
+          showOptional && (
+            <span className="text-xs font-normal text-gray-400 dark:text-gray-500">
+              (Optional)
+            </span>
+          )
+        )}
       </span>
     </label>
     {children}
@@ -3134,9 +3154,7 @@ export const AdmissionForm = () => {
                   }
                 >
                   {bulkUploadLoading ? (
-                    <>
-                      Stop watching
-                    </>
+                    <>Stop watching</>
                   ) : bulkUploadResult || bulkUploadSuccess ? (
                     "Close"
                   ) : (

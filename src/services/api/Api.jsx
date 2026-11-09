@@ -1840,22 +1840,20 @@ export const fetchSubjectMatrix = async (yearLevelId, schoolYear = "") => {
     });
     return response.data;
   } catch (err) {
-    console.error("Failed to fetch subject matrix:", err);
     throw err;
   }
 };
 
-// Class timetable (Mon-Sat) for a year level on a given date
-export const fetchClassTimetable = async (yearLevelId, date = "") => {
+export const fetchClassTimetable = async (yearLevelId, date = "", tag = "") => {
   try {
     const params = { year_level_id: yearLevelId };
-    if (date) params.date = date; // YYYY-MM-DD, backend defaults to today
+    if (date) params.date = date;
+    if (tag) params.tag = tag;
     const response = await axios.get(`${BASE_URL}/t/class-timetable/`, {
       params,
     });
     return response.data;
   } catch (err) {
-    console.error("Failed to fetch class timetable:", err);
     throw err;
   }
 };
@@ -1983,14 +1981,17 @@ export const fetchSubjectsByYearLevel = async (yearLevelId) => {
   }
 };
 
-
 export const updateEvent = async (id, eventData) => {
   try {
-    const response = await axios.patch(`${BASE_URL}/a/events/${id}/`, eventData, {
-      headers: {
-        "Content-Type": "application/json",
+    const response = await axios.patch(
+      `${BASE_URL}/a/events/${id}/`,
+      eventData,
+      {
+        headers: {
+          "Content-Type": "application/json",
+        },
       },
-    });
+    );
     return response.data;
   } catch (error) {
     if (error.response) {
@@ -2023,5 +2024,91 @@ export const deleteEvent = async (id) => {
     } else {
       throw new Error(error.message || "Failed to delete event");
     }
+  }
+};
+
+
+
+// ---------------------------------------------------------------------------
+// Paste these into your existing services/api/Api.js
+// (fetchSchoolYear and fetchTerms already exist there - do not duplicate them)
+// ---------------------------------------------------------------------------
+
+// Pulls a readable message out of a DRF-style error response
+const extractApiError = (error, fallback) => {
+  if (error.response) {
+    const data = error.response.data;
+    if (typeof data === "string") return data;
+    if (data?.message) return data.message;
+    if (data?.detail) return data.detail;
+    if (data && typeof data === "object") {
+      const first = Object.entries(data)[0];
+      if (first) {
+        const [field, msg] = first;
+        const text = Array.isArray(msg) ? msg[0] : msg;
+        return field === "non_field_errors" ? text : `${field}: ${text}`;
+      }
+    }
+    return fallback;
+  }
+  if (error.request) return "No response received from server";
+  return error.message || fallback;
+};
+
+/* ---------------- SESSIONS (school years) : /d/school-years/ ---------------- */
+
+export const createSchoolYear = async (payload) => {
+  try {
+    const res = await axios.post(`${BASE_URL}/d/school-years/`, payload);
+    return res.data;
+  } catch (error) {
+    throw new Error(extractApiError(error, "Failed to create session"));
+  }
+};
+
+export const updateSchoolYear = async (id, payload) => {
+  try {
+    const res = await axios.patch(`${BASE_URL}/d/school-years/${id}/`, payload);
+    return res.data;
+  } catch (error) {
+    throw new Error(extractApiError(error, "Failed to update session"));
+  }
+};
+
+export const deleteSchoolYear = async (id) => {
+  try {
+    await axios.delete(`${BASE_URL}/d/school-years/${id}/`);
+    return true;
+  } catch (error) {
+    throw new Error(extractApiError(error, "Failed to delete session"));
+  }
+};
+
+/* ---------------- TERMS : /d/terms/ ---------------- */
+
+export const createTerm = async (payload) => {
+  try {
+    const res = await axios.post(`${BASE_URL}/d/terms/`, payload);
+    return res.data;
+  } catch (error) {
+    throw new Error(extractApiError(error, "Failed to create term"));
+  }
+};
+
+export const updateTerm = async (id, payload) => {
+  try {
+    const res = await axios.patch(`${BASE_URL}/d/terms/${id}/`, payload);
+    return res.data;
+  } catch (error) {
+    throw new Error(extractApiError(error, "Failed to update term"));
+  }
+};
+
+export const deleteTerm = async (id) => {
+  try {
+    await axios.delete(`${BASE_URL}/d/terms/${id}/`);
+    return true;
+  } catch (error) {
+    throw new Error(extractApiError(error, "Failed to delete term"));
   }
 };

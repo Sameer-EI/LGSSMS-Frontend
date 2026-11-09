@@ -14,37 +14,43 @@ export const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [userID, setUserID] = useState(
-    () => localStorage.getItem("user_id") || ""
+    () => localStorage.getItem("user_id") || "",
   );
   const [teacherID, setTeacherID] = useState(
-    () => localStorage.getItem("teacher_id") || ""
+    () => localStorage.getItem("teacher_id") || "",
   );
   const [guardianID, setGuardianID] = useState(
-    () => localStorage.getItem("guardian_id") || ""
+    () => localStorage.getItem("guardian_id") || "",
   );
   const [userName, setUserName] = useState(
-    () => localStorage.getItem("user_name") || ""
+    () => localStorage.getItem("user_name") || "",
   );
   const [userProfile, setUserProfile] = useState(
-    () => localStorage.getItem("user_profile") || ""
+    () => localStorage.getItem("user_profile") || "",
   );
-  const [authTokens, setAuthTokens] = useState(
-    () => JSON.parse(localStorage.getItem("authTokens")) || null
-  );
+  const [authTokens, setAuthTokens] = useState(() => {
+    // Corrupt / hand-edited storage must mean "logged out", never a crash.
+    try {
+      const parsed = JSON.parse(localStorage.getItem("authTokens"));
+      return parsed?.access ? parsed : null;
+    } catch {
+      return null;
+    }
+  });
   const [userRole, setUserRole] = useState(
-    () => localStorage.getItem("userRole") || ""
+    () => localStorage.getItem("userRole") || "",
   );
   const [studentID, setStudentID] = useState(
-    () => localStorage.getItem("student_id") || ""
+    () => localStorage.getItem("student_id") || "",
   );
   const [yearLevelID, setYearLevelID] = useState(
-    () => localStorage.getItem("year_level_id") || ""
+    () => localStorage.getItem("year_level_id") || "",
   );
   const [stuyearLevelID, setstuYearLevelID] = useState(
-    () => localStorage.getItem("stu_year_level_id") || ""
+    () => localStorage.getItem("stu_year_level_id") || "",
   );
   const [stuyearLevelName, setstuYearLevelName] = useState(
-    () => localStorage.getItem("stu_year_level_name") || ""
+    () => localStorage.getItem("stu_year_level_name") || "",
   );
   const [loading, setLoading] = useState(true);
 
@@ -77,6 +83,49 @@ export const AuthProvider = ({ children }) => {
     return url;
   };
 
+  // Single place that resets every piece of auth state (+ storage).
+  // Once authTokens is null, isAuthenticated is false and the router's global
+  // gate redirects to /login. Only stable setters/refs are used here, so it is
+  // safe to call from the axios interceptor and the storage listener.
+  const clearAuthState = () => {
+    setAuthTokens(null);
+    authTokensRef.current = null;
+    setUserRole("");
+    setUserID("");
+    setTeacherID("");
+    setGuardianID("");
+    setUserName("");
+    setUserProfile("");
+    setStudentID("");
+    setYearLevelID("");
+    setstuYearLevelID("");
+    setstuYearLevelName("");
+
+    try {
+      localStorage.clear();
+    } catch {
+      /* storage unavailable - state is already cleared */
+    }
+  };
+
+  // Logged out in another tab (or storage wiped) => log out here too.
+  useEffect(() => {
+    const onStorage = (e) => {
+      // e.key === null means localStorage.clear() was called
+      if (e.key !== null && e.key !== "authTokens") return;
+      let hasToken = false;
+      try {
+        hasToken = !!JSON.parse(localStorage.getItem("authTokens"))?.access;
+      } catch {
+        hasToken = false;
+      }
+      if (!hasToken && authTokensRef.current) clearAuthState();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Axios instance with interceptors
   const axiosInstance = useMemo(() => {
     const instance = axios.create({ baseURL: BASE_URL });
@@ -91,6 +140,17 @@ export const AuthProvider = ({ children }) => {
       (response) => response,
       async (error) => {
         const originalRequest = error.config;
+
+        // 401 and we have no refresh token to recover with => the session is
+        // gone. Log out so the global guard sends the user to /login.
+        if (
+          error.response?.status === 401 &&
+          authTokensRef.current &&
+          !authTokensRef.current.refresh
+        ) {
+          clearAuthState();
+          return Promise.reject(error);
+        }
 
         if (
           error.response?.status === 401 &&
@@ -140,7 +200,7 @@ export const AuthProvider = ({ children }) => {
         }
 
         return Promise.reject(error);
-      }
+      },
     );
 
     return instance;
@@ -180,7 +240,7 @@ export const AuthProvider = ({ children }) => {
       if (data.students && Array.isArray(data.students)) {
         localStorage.setItem(
           "guardian_students",
-          JSON.stringify(data.students)
+          JSON.stringify(data.students),
         );
       }
       if (data.year_level_id) {
@@ -222,22 +282,7 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       console.error("Logout error:", error);
     } finally {
-      // Clear state
-      setAuthTokens(null);
-      authTokensRef.current = null;
-      setUserRole("");
-      setUserID("");
-      setTeacherID("");
-      setGuardianID("");
-      setUserName("");
-      setUserProfile("");
-      setStudentID("");
-      setYearLevelID("");
-      setstuYearLevelID("");
-      setstuYearLevelName("");
-
-      // Clear storage
-      localStorage.clear();
+      clearAuthState();
     }
   };
 
@@ -252,11 +297,10 @@ export const AuthProvider = ({ children }) => {
             "Content-Type": "application/json",
             Authorization: `Bearer ${authTokens?.access}`,
           },
-        }
+        },
       );
       if (userRole === constants.roles.director) return response.data;
     } catch (error) {
-      console.error("Registration error:", error);
       throw error;
     }
   };
@@ -265,7 +309,8 @@ export const AuthProvider = ({ children }) => {
     try {
       return await axios.post(`${BASE_URL}/auth/reset_password/`, userDetails);
     } catch (error) {
-      console.error(error);
+      console.error("Reset password error:", error);
+      throw error; // lets the page show the error modal
     }
   };
 
@@ -279,10 +324,11 @@ export const AuthProvider = ({ children }) => {
             "Content-Type": "application/json",
             Authorization: `Bearer ${authTokens?.access}`,
           },
-        }
+        },
       );
     } catch (error) {
-      console.error(error);
+      console.error("Change password error:", error);
+      throw error;
     }
   };
 
@@ -328,7 +374,7 @@ export const AuthProvider = ({ children }) => {
       guardianID,
       userName,
       userProfile,
-    ]
+    ],
   );
 
   return (

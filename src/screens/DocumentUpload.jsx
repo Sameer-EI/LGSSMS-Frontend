@@ -49,6 +49,16 @@ const TC_NO_HINT = "TC-YYYY-XXX (e.g. TC-2022-00123)";
 const validateTcNo = (v) =>
   !v ? "TC No. is required" : TC_NO_REGEX.test(v) ? "" : `TC: ${TC_NO_HINT}`;
 
+// Aadhaar must be exactly 12 digits.
+// Field is optional: empty is allowed, but anything typed must be exactly 12 digits.
+// (To make it mandatory, return "Aadhaar number is required" when !v.)
+const AADHAAR_REGEX = /^\d{12}$/;
+const validateAadhaar = (v) =>
+  !v ? "" : AADHAAR_REGEX.test(v) ? "" : "Aadhaar number must be exactly 12 digits";
+
+// Matches any Aadhaar document type name: "Aadhaar Number", "Aadhar Card", "adharcard", ...
+const isAadhaarDoc = (docName = "") => /a+dh+a+r/i.test(String(docName).trim());
+
 // Small reusable field wrapper for the TC modal
 const TcField = ({ label, required, error, children }) => (
   <div className="form-control w-full">
@@ -209,6 +219,36 @@ const mapTcResponse = (raw) => {
   return out;
 };
 
+// ---- Backend error formatting ----
+const API_FIELD_LABELS = {
+  identities: "Identity",
+  document_types: "Document type",
+  files: "File",
+  student: "Student",
+  teacher: "Teacher",
+  guardian: "Guardian",
+  office_staff: "Office staff",
+};
+
+
+const formatApiErrors = (data) => {
+  if (!data) return "";
+  if (typeof data === "string") return data;
+  if (data.error || data.detail) return String(data.error || data.detail);
+
+  return Object.entries(data)
+    .map(([key, val]) => {
+      const msg = Array.isArray(val)
+        ? val.join(" ")
+        : typeof val === "object"
+        ? JSON.stringify(val)
+        : String(val);
+      const label = API_FIELD_LABELS[key];
+      return `${label ? `${label}: ` : ""}${msg}`;
+    })
+    .join("\n");
+};
+
 export const DocumentUpload = () => {
   // Get Auth Context
   const { axiosInstance } = useContext(AuthContext);
@@ -264,6 +304,7 @@ export const DocumentUpload = () => {
   const [tcGeneratedFile, setTcGeneratedFile] = useState(null);
   const [tcPreviewUrl, setTcPreviewUrl] = useState("");
   const [tcNoError, setTcNoError] = useState("");
+  const [aadhaarError, setAadhaarError] = useState("");
   const [showPreviewFull, setShowPreviewFull] = useState(false);
 
   const [role, setRole] = useState("");
@@ -318,6 +359,9 @@ export const DocumentUpload = () => {
     if (!selectedDoc) return undefined;
 
     const name = selectedDoc.name.trim().toLowerCase();
+
+    // Aadhaar is always exactly 12 digits
+    if (isAadhaarDoc(name)) return 12;
 
     const maxLengths = {
       "adharcard": 12,
@@ -389,11 +433,10 @@ export const DocumentUpload = () => {
 
     const name = selectedDoc.name.trim().toLowerCase();
 
-    if (name === "adharcard") {
-      const aadhaarRegex = /^\d{12}$/;
-      return aadhaarRegex.test(identity)
+    if (isAadhaarDoc(name)) {
+      return AADHAAR_REGEX.test(identity)
         ? ""
-        : "Aadhaar must be 12 digits (e.g. 123456789012)";
+        : "Aadhaar number must be exactly 12 digits";
     } else if (name === "passport") {
       const passportRegex = /^[A-Z]{1}[0-9]{7}$/;
       return passportRegex.test(identity)
@@ -656,14 +699,21 @@ export const DocumentUpload = () => {
 
     setUploadFields(newFields);
 
+    // Re-validate the identity already typed against the newly selected type
+    const typeChangeErrors = [...identityErrors];
+    typeChangeErrors[index] =
+      validateIdentity(newFields[index].identities, selectedDocType) || "";
+    setIdentityErrors(typeChangeErrors);
+
     if (selectedDoc && formData.student) {
       const docName = selectedDoc.name.toLowerCase().trim();
       const isTC = docName.includes('transfer') && docName.includes('certificate');
       
       if (isTC) {
-        console.log("✅ Opening TC Modal...");
+        console.log("Opening TC Modal...");
         setTcUploadIndex(index);
         setTcNoError("");
+        setAadhaarError("");
         
         const { data: details } = await fetchStudentDetailsForTC(formData.student);
         setTcFormData({
@@ -820,28 +870,17 @@ export const DocumentUpload = () => {
   // --- HANDLE TC SUBMIT ---
   const handleTcSubmit = async () => {
     try {
+      // Only TC No. is mandatory. Aadhaar stays optional
+      // (but must be exactly 12 digits if something is typed).
       const tcErr = validateTcNo(tcFormData.tc_no);
       setTcNoError(tcErr);
 
-      const requiredFields = {
-        scholar_no: "Scholar No.",
-        student_name: "Student Name",
-        father_name: "Father Name",
-        mother_name: "Mother Name",
-        dob: "Date of Birth",
-      };
-      const missingFields = Object.keys(requiredFields)
-        .filter((field) => !String(tcFormData[field] || "").trim())
-        .map((f) => requiredFields[f]);
+      const aadhaarErr = validateAadhaar(tcFormData.aadhar_no);
+      setAadhaarError(aadhaarErr);
 
-      if (tcErr || missingFields.length > 0) {
+      if (tcErr || aadhaarErr) {
         setAlertMessage(
-          [
-            tcErr ? `❌ ${tcErr}` : "",
-            missingFields.length
-              ? `❌ Please fill in all required fields: ${missingFields.join(", ")}`
-              : "",
-          ]
+          [tcErr ? `${tcErr}` : "", aadhaarErr ? `❌ ${aadhaarErr}` : ""]
             .filter(Boolean)
             .join("\n")
         );
@@ -860,9 +899,6 @@ export const DocumentUpload = () => {
         return;
       }
 
-      console.log("📄 Generated TC File:", tcFile);
-      console.log("📄 File type:", typeof tcFile);
-      console.log("📄 Is File instance:", tcFile instanceof File);
 
       if (tcPreviewUrl) {
         URL.revokeObjectURL(tcPreviewUrl);
@@ -874,7 +910,7 @@ export const DocumentUpload = () => {
       const newFields = [...uploadFields];
       if (tcUploadIndex !== -1) {
         newFields[tcUploadIndex].files = tcFile;
-        console.log("✅ File set in uploadFields:", newFields[tcUploadIndex].files);
+        console.log("File set in uploadFields:", newFields[tcUploadIndex].files);
         
         // NOTE: identity is NOT auto-generated for TC. The user enters it manually.
         setUploadFields(newFields);
@@ -890,20 +926,16 @@ export const DocumentUpload = () => {
         const newDocErrors = Array.isArray(docTypeErrors) ? [...docTypeErrors] : [];
         newDocErrors[tcUploadIndex] = "";
         setDocTypeErrors(newDocErrors);
-        
-        console.log("✅ TC file attached to upload field");
-        console.log("✅ uploadFields after update:", newFields);
       }
 
       setShowTcModal(false);
-      setAlertMessage("✅ Transfer Certificate generated successfully! Enter the TC identity, then click 'Upload' to submit.");
+      setAlertMessage("Transfer Certificate generated successfully! Enter the TC identity, then click 'Upload' to submit.");
       setShowAlert(true);
       
       setTcFormData({ ...TC_DEFAULTS });
       setTcUploadIndex(-1);
       
     } catch (error) {
-      console.error("❌ Error in handleTcSubmit:", error);
       setAlertMessage("Error: " + error.message);
       setShowAlert(true);
       setGeneratingTC(false);
@@ -911,7 +943,16 @@ export const DocumentUpload = () => {
   };
 
   const handleUploadChange = (e, index) => {
-    const { name, value } = e.target;
+    const { name } = e.target;
+    let value = e.target.value;
+
+    // Aadhaar identity: digits only
+    if (name === "identities") {
+      const doc = documentType.find(
+        (d) => d.id.toString() === String(uploadFields[index].document_types)
+      );
+      if (doc && isAadhaarDoc(doc.name)) value = value.replace(/\D/g, "");
+    }
 
     const newFields = [...uploadFields];
     newFields[index][name] = value;
@@ -957,6 +998,7 @@ export const DocumentUpload = () => {
     const newIdentityErrors = [...identityErrors];
     const newFileErrors = [...FilesErrors];
     let hasError = false;
+    let currentIndex = -1;
 
     try {
       for (const [index, field] of uploadFields.entries()) {
@@ -983,7 +1025,6 @@ export const DocumentUpload = () => {
           hasError = true;
         } else if (field.files instanceof File) {
           newFileErrors[index] = "";
-          console.log(`✅ File ${index} is valid:`, field.files.name);
         } else {
           newFileErrors[index] = "Invalid file format";
           hasError = true;
@@ -1012,23 +1053,21 @@ export const DocumentUpload = () => {
       setFilesErrors(newFileErrors);
 
       if (hasError) {
-        console.log("❌ Validation failed");
         setLoading(false);
         return;
       }
 
-      console.log("✅ Validation passed, submitting...");
 
-      for (const field of uploadFields) {
+      for (const [uploadIndex, field] of uploadFields.entries()) {
+        currentIndex = uploadIndex;
         const formDataToSend = new FormData();
         
-        console.log("📤 Preparing to upload:", field.files instanceof File ? field.files.name : 'No file');
+        console.log("Preparing to upload:", field.files instanceof File ? field.files.name : 'No file');
         
         if (field.files instanceof File) {
           formDataToSend.append("files", field.files);
-          console.log("📤 File appended:", field.files.name);
+          console.log("File appended:", field.files.name);
         } else {
-          console.error("❌ No valid file found for upload");
           continue;
         }
         
@@ -1045,14 +1084,14 @@ export const DocumentUpload = () => {
         if (field.identities)
           formDataToSend.append("identities", field.identities);
 
-        console.log("📤 Sending request...");
+        console.log("Sending request...");
         await axios.post(`${constants.baseUrl}/d/Document/`, formDataToSend, {
           headers: { "Content-Type": "multipart/form-data" },
         });
-        console.log("✅ Upload successful");
+        console.log("Upload successful");
       }
 
-      setAlertMessage("✅ Documents uploaded successfully!");
+      setAlertMessage("Documents uploaded successfully!");
       setShowAlert(true);
       setUploadFields([{ files: null, document_types: "", identities: "" }]);
       setFormData({
@@ -1081,13 +1120,29 @@ export const DocumentUpload = () => {
       console.error("Submit error:", err);
       if (err.response && err.response.data) {
         const responseData = err.response.data;
-        if (responseData.error === "You can't modify the identity of an existing document.") {
-          setAlertMessage("You can't modify the identity of an existing document.");
-          setShowAlert(true);
-        } else {
-          setApiErrors(responseData);
-          setAlertMessage("Error uploading documents. Please try again.");
-          setShowAlert(true);
+
+        // Show the backend's message in the modal
+        setAlertMessage(
+          formatApiErrors(responseData) ||
+            "Error uploading documents. Please try again."
+        );
+        setShowAlert(true);
+        setApiErrors(
+          typeof responseData === "object"
+            ? responseData
+            : { error: String(responseData) }
+        );
+
+        // Also show the identity error under the Identity input of the failing row
+        if (responseData.identities && currentIndex !== -1) {
+          const msg = Array.isArray(responseData.identities)
+            ? responseData.identities.join(" ")
+            : String(responseData.identities);
+          setIdentityErrors((prev) => {
+            const copy = [...prev];
+            copy[currentIndex] = msg;
+            return copy;
+          });
         }
       } else {
         setAlertMessage("An unexpected error occurred. Please try again.");
@@ -1868,7 +1923,7 @@ export const DocumentUpload = () => {
                 Transfer Certificate Details
               </h3>
               <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-1">
-                Review and complete the details, then click "Generate TC".
+                Only TC No. is required. Fill in the other details as needed, then click "Generate TC".
               </p>
             </div>
 
@@ -1924,20 +1979,19 @@ export const DocumentUpload = () => {
                     />
                   </TcField>
 
-                  <TcField label="Aadhar No.">
+                  <TcField label="Aadhar No." error={aadhaarError}>
                     <input
                       type="text"
                       inputMode="numeric"
                       maxLength={12}
-                      className={tcInput}
+                      className={`${tcInput} ${aadhaarError ? "input-error" : ""}`}
                       value={tcFormData.aadhar_no}
                       placeholder="12 digits"
-                      onChange={(e) =>
-                        setTcFormData({
-                          ...tcFormData,
-                          aadhar_no: e.target.value.replace(/\D/g, ""),
-                        })
-                      }
+                      onChange={(e) => {
+                        const v = e.target.value.replace(/\D/g, "");
+                        setTcFormData({ ...tcFormData, aadhar_no: v });
+                        setAadhaarError(validateAadhaar(v));
+                      }}
                     />
                   </TcField>
 
@@ -1973,13 +2027,13 @@ export const DocumentUpload = () => {
                 </h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
                   {[
-                    ["student_name", "Student Name", true],
-                    ["father_name", "Father Name", true],
-                    ["mother_name", "Mother Name", true],
+                    ["student_name", "Student Name"],
+                    ["father_name", "Father Name"],
+                    ["mother_name", "Mother Name"],
                     ["school", "School"],
                     ["district", "District"],
-                  ].map(([key, label, req]) => (
-                    <TcField key={key} label={label} required={req}>
+                  ].map(([key, label]) => (
+                    <TcField key={key} label={label}>
                       <input
                         type="text"
                         className={tcInput}
@@ -2030,7 +2084,7 @@ export const DocumentUpload = () => {
                       }
                     />
                   </TcField>
-                  <TcField label="Date of Birth" required>
+                  <TcField label="Date of Birth">
                     <input
                       type="date"
                       className={tcInput}

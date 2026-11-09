@@ -83,89 +83,6 @@ export const ViewAllExpenses = () => {
     }
   };
 
-  // const getSchoolExpense = async () => {
-  //   setLoading(true);
-  //   try {
-  //     setError("");
-  //     const response = await axiosInstance.get(
-  //       `/d/School-Expense/?school_year=${selectedSchoolYear}&category=${selectedCategory}`
-  //     );
-
-  //     // Map the data to match component's expected structure
-  //     const mappedData = response.data.map((expense) => {
-  //       let amount = "0.00";
-  //       let status = expense.approved_by ? "approved" : "pending";
-  //       let payment_method = "N/A";
-  //       let expense_date = new Date(expense.created_at).toLocaleDateString("en-IN");
-
-  //       // Extract month from description for salary expenses
-  //       let expenseMonthYear = null;
-
-  //       // For salary expenses (category is 6 and payment is null)
-  //       if (expense.category === 6 && !expense.payment) {
-  //         // Parse amount from description for salary
-  //         const totalSalaryMatch = expense.description.match(
-  //           /Total Salary: ₹([\d,.]+)/
-  //         );
-  //         if (totalSalaryMatch) {
-  //           amount = totalSalaryMatch[1];
-  //         }
-
-  //         // Extract month from description for salary
-  //         const monthMatch = expense.description.match(/for\s+(\w+)/i);
-  //         if (monthMatch) {
-  //           const monthName = monthMatch[1];
-  //           // Try to get year from school year name or current year
-  //           const currentYear = new Date().getFullYear();
-  //           const yearFromSchoolYear = expense.school_year_name
-  //             ? expense.school_year_name.split('-')[0]
-  //             : currentYear;
-
-  //           // Create date from month name and year
-  //           try {
-  //             const date = new Date(`${monthName} 1, ${yearFromSchoolYear}`);
-  //             if (!isNaN(date.getTime())) {
-  //               expense_date = date.toLocaleDateString("en-IN");
-  //             }
-  //           } catch (e) {
-  //             console.warn("Could not parse date from month name:", monthName);
-  //           }
-  //         }
-
-  //         payment_method = "Cash"; // Default for salary
-  //         status = expense.approved_by ? "approved" : "pending";
-  //       }
-
-  //       // For expenses with payment object
-  //       if (expense.payment) {
-  //         amount = expense.payment.amount;
-  //         status = expense.payment.status.toLowerCase();
-  //         payment_method = expense.payment.payment_method;
-
-  //         // Use payment_date if available, otherwise use created_at
-  //         if (expense.payment.payment_date) {
-  //           expense_date = new Date(expense.payment.payment_date).toLocaleDateString("en-IN");
-  //         }
-  //       }
-
-  //       return {
-  //         ...expense,
-  //         amount: amount,
-  //         status: status,
-  //         payment_method: payment_method,
-  //         expense_date: expense_date,
-  //         attachment: null,
-  //       };
-  //     });
-
-  //     setSchoolExpense(mappedData);
-  //   } catch (err) {
-  //     console.error("Cannot get the school expense:", err);
-  //     setError("Failed to load expenses. Please try again later.");
-  //   } finally {
-  //     setLoading(false);
-  //   }
-  // };
 
   const getSchoolExpense = async () => {
     setLoading(true);
@@ -467,7 +384,7 @@ export const ViewAllExpenses = () => {
               >
                 <option value="">All</option>
                 <option value="pending">Pending</option>
-                <option value="approved">Approved</option>
+                <option value="success">Success</option>
                 <option value="rejected">Rejected</option>
               </select>
             </div>
