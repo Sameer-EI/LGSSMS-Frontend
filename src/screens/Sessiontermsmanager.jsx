@@ -15,8 +15,8 @@ import {
 /* ------------------------------------------------------------------ */
 // Session (school year): { id, year_name, start_date, end_date }
 // Term:                  { id, year, term_number, start_date, end_date }
-const MAX_TERMS_PER_SESSION = 2;
-const TERM_NUMBERS = [1, 2];
+const MAX_TERMS_PER_SESSION = 3;
+const TERM_NUMBERS = [1, 2, 3];
 
 const EMPTY_SESSION = { year_name: "", start_date: "", end_date: "" };
 const EMPTY_TERM = { term_number: "", start_date: "", end_date: "" };
@@ -67,25 +67,28 @@ const termSessionId = (t, sessions) => {
 
 const termLabel = (t) => `Term ${t.term_number}`;
 
-// Suggested dates for a new term so that Term 1 comes first and Term 2 follows
+// Suggested dates for a new term: it starts the day after the previous term
+// (or on the session start for Term 1) and ends the day before the next term
+// (or on the session end for the last term)
 const suggestTermDates = (termNumber, session, existingTerms) => {
   if (!session || !termNumber) return { start_date: "", end_date: "" };
   const n = Number(termNumber);
   const sStart = toInputDate(session.start_date);
   const sEnd = toInputDate(session.end_date);
-  const t1 = existingTerms.find((t) => Number(t.term_number) === 1);
-  const t2 = existingTerms.find((t) => Number(t.term_number) === 2);
 
-  let start = "";
-  let end = "";
+  const before = existingTerms
+    .filter((t) => Number(t.term_number) < n)
+    .sort((a, b) => Number(b.term_number) - Number(a.term_number))[0];
+  const after = existingTerms
+    .filter((t) => Number(t.term_number) > n)
+    .sort((a, b) => Number(a.term_number) - Number(b.term_number))[0];
 
-  if (n === 1) {
-    start = sStart;
-    if (t2) end = addDays(toInputDate(t2.start_date), -1);
-  } else if (n === 2) {
-    if (t1) start = addDays(toInputDate(t1.end_date), 1);
-    end = sEnd;
-  }
+  let start = before ? addDays(toInputDate(before.end_date), 1) : sStart;
+  let end = after
+    ? addDays(toInputDate(after.start_date), -1)
+    : n === TERM_NUMBERS[TERM_NUMBERS.length - 1]
+      ? sEnd
+      : "";
 
   // never suggest something outside the session or an inverted range
   if (start && sEnd && start > sEnd) start = "";
@@ -375,18 +378,17 @@ const termsBySession = useMemo(() => {
 
     // max 2 terms per session (only enforced on create)
     if (!editingTermId && selectedTerms.length >= MAX_TERMS_PER_SESSION)
-      return notify("A session can have only 2 terms.");
+      return notify(`A session can have only ${MAX_TERMS_PER_SESSION} terms.`);
 
-    // Term 1 must come before Term 2
+    // Terms must run in order: Term 1, then Term 2, then Term 3
     const termNo = Number(termForm.term_number);
-    const other = selectedTerms.find(
-      (t) => t.id !== editingTermId && Number(t.term_number) !== termNo,
-    );
-    if (other) {
-      if (termNo === 1 && termForm.end_date >= toInputDate(other.start_date))
-        return notify("Term 1 must end before Term 2 starts.");
-      if (termNo === 2 && termForm.start_date <= toInputDate(other.end_date))
-        return notify("Term 2 must start after Term 1 ends.");
+    for (const t of selectedTerms) {
+      if (t.id === editingTermId) continue;
+      const no = Number(t.term_number);
+      if (no < termNo && termForm.start_date <= toInputDate(t.end_date))
+        return notify(`Term ${termNo} must start after Term ${no} ends.`);
+      if (no > termNo && termForm.end_date >= toInputDate(t.start_date))
+        return notify(`Term ${termNo} must end before Term ${no} starts.`);
     }
 
     // terms of one session must not overlap
@@ -534,7 +536,7 @@ const termsBySession = useMemo(() => {
                         : "text-white/90"
                     }`}
                   >
-                    Manage academic sessions and their two terms
+                    Manage academic sessions and their three terms
                   </p>
                 </div>
               </div>
@@ -684,7 +686,7 @@ const termsBySession = useMemo(() => {
                           title={
                             canAddTerm
                               ? "Add term"
-                              : "A session can have only 2 terms"
+                              : `A session can have only ${MAX_TERMS_PER_SESSION} terms`
                           }
                           className="bgTheme text-white px-4 py-2.5 rounded-sm text-sm font-medium shadow-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
@@ -709,7 +711,7 @@ const termsBySession = useMemo(() => {
                             No terms added
                           </h3>
                           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                            Add Term 1 and Term 2 for this session
+                            Add Term 1, Term 2 and Term 3 for this session
                           </p>
                         </div>
                       ) : (

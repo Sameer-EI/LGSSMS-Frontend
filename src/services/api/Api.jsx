@@ -2027,8 +2027,6 @@ export const deleteEvent = async (id) => {
   }
 };
 
-
-
 // ---------------------------------------------------------------------------
 // Paste these into your existing services/api/Api.js
 // (fetchSchoolYear and fetchTerms already exist there - do not duplicate them)
@@ -2068,7 +2066,7 @@ export const createSchoolYear = async (payload) => {
 
 export const updateSchoolYear = async (id, payload) => {
   try {
-    const res = await axios.patch(`${BASE_URL}/d/school-years/${id}/`, payload);
+    const res = await axios.put(`${BASE_URL}/d/school-year/${id}/`, payload);
     return res.data;
   } catch (error) {
     throw new Error(extractApiError(error, "Failed to update session"));
@@ -2077,7 +2075,7 @@ export const updateSchoolYear = async (id, payload) => {
 
 export const deleteSchoolYear = async (id) => {
   try {
-    await axios.delete(`${BASE_URL}/d/school-years/${id}/`);
+    await axios.delete(`${BASE_URL}/d/school-year/${id}/`);
     return true;
   } catch (error) {
     throw new Error(extractApiError(error, "Failed to delete session"));

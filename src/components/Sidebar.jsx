@@ -350,6 +350,23 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
                         </li>
                       </>
                     )}
+
+                    {(role === constants.roles.director ||
+                      role === constants.roles.teacher) && (
+                      <li>
+                        <Link
+                          onClick={(e) =>
+                            handleNavigation(e, allRouterLink.StudentMarksFill)
+                          }
+                          className="flex items-center gap-2 px-3 py-2 rounded-md 
+                         hover:bg-blue-100 dark:hover:bg-gray-700 
+                         transition text-gray-800 dark:text-gray-200"
+                        >
+                          <i className="fa-solid fa-fill-drip w-5"></i> Fill
+                          Student Marks
+                        </Link>
+                      </li>
+                    )}
                   </ul>
                 </div>
               )}
@@ -769,22 +786,6 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
                         Academic Calendar
                       </Link>
                     </li>
-                    {(role === constants.roles.director ||
-                      role === constants.roles.teacher) && (
-                      <li>
-                        <Link
-                          onClick={(e) =>
-                            handleNavigation(e, allRouterLink.StudentMarksFill)
-                          }
-                          className="flex items-center gap-2 px-3 py-2 rounded-md 
-                         hover:bg-blue-100 dark:hover:bg-gray-700 
-                         transition text-gray-800 dark:text-gray-200"
-                        >
-                          <i className="fa-solid fa-fill-drip w-5"></i> Fill
-                          Student Marks
-                        </Link>
-                      </li>
-                    )}
                     {role === constants.roles.director && (
                       <li>
                         <Link
