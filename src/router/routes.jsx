@@ -99,7 +99,7 @@ export const routes = [
   {
     path: allRouterLink.homeScreen,
     element: <HomeScreen />,
-    protected: false,
+    public: true,
   },
   {
     path: allRouterLink.registerUser,
@@ -110,7 +110,7 @@ export const routes = [
   {
     path: allRouterLink.loginUser,
     element: <Login />,
-    protected: false,
+    public: true,
   },
   {
     path: allRouterLink.changePassword,
@@ -120,12 +120,12 @@ export const routes = [
   {
     path: allRouterLink.forgotPassword,
     element: <ForgotPassword />,
-    protected: false,
+    public: true,
   },
   {
     path: allRouterLink.resetPassword,
     element: <ResetPassword />,
-    protected: false,
+    public: true,
   },
   {
     path: allRouterLink.admissionForm,
@@ -410,7 +410,7 @@ export const routes = [
   {
     path: allRouterLink.belowAttendance,
     element: <BelowAttendance />,
-    protected: false,
+    protected: true,
     allowedRoles: [constants.roles.teacher, constants.roles.director, constants.roles.officeStaff],
   },
   {
@@ -461,7 +461,7 @@ export const routes = [
   {
     path: allRouterLink.attendanceRecord,
     element: <AttendanceRecord />,
-    protected: false,
+    protected: true,
   },
   {
     path: allRouterLink.feeSummary,
@@ -490,42 +490,42 @@ export const routes = [
   {
     path: allRouterLink.fullAttendance,
     element: <FullAttendance />,
-    protected: false,
+    protected: true,
   },
   {
     path: allRouterLink.allClasses,
     element: <Allclasses />,
-    protected: false,
+    protected: true,
   },
   {
     path: allRouterLink.allStudentsperClass,
     element: <Allstudentsperclass />,
-    protected: false,
+    protected: true,
   },
   {
     path: allRouterLink.studentDetails,
     element: <StudentDetails />,
-    protected: false,
+    protected: true,
   },
   {
     path: allRouterLink.updateStudentdetail,
     element: <UpdateStudentDetail />,
-    protected: false,
+    protected: true,
   },
   {
     path: allRouterLink.allStaffMembers,
     element: <AllStaff />,
-    protected: false,
+    protected: true,
   },
   {
     path: allRouterLink.staffDetail,
     element: <Staffdetail />,
-    protected: false,
+    protected: true,
   },
   {
     path: allRouterLink.updateStaffDetails,
     element: <UpdateStaffdetails />,
-    protected: false,
+    protected: true,
   },
   {
     path: allRouterLink.myAttendance,
@@ -668,7 +668,7 @@ export const routes = [
   {
     path: allRouterLink.privacyPolicy,
     element: <PrivacyPolicy />,
-    protected: false,
+    public: true,
   },
   {
     path: allRouterLink.managecategory,
@@ -705,11 +705,11 @@ export const routes = [
   {
     path: allRouterLink.unAuthorized,
     element: <Unauthorized />,
-    protected: false,
+    protected: true,
   },
   {
     path: allRouterLink.notFound,
     element: <NotFound />,
-    protected: false,
+    protected: true,
   },
 ];

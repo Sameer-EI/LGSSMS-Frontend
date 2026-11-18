@@ -3,9 +3,8 @@ import { ErrorBoundary } from '@sentry/react';
 import { Routes, Route, useLocation } from "react-router-dom";
 import { MainLayout } from "../layouts/MainLayout";
 import { routes } from "./routes";
-import { ProtectedRoute } from "../protectedRoutes/Protected";
+import { ProtectedRoute, RequireAuth } from "../protectedRoutes/Protected";
 import { NotFound } from "../components/NotFound";
-import { allRouterLink } from "./AllRouterLinks";
 import { Login } from "../screens/Auth/Login";
 import { useContext } from "react";
 import { AuthContext } from "../context/AuthContext";
@@ -33,6 +32,11 @@ function getDashboardForRole(role) {
   }
 }
 
+// Default-deny: a route is public ONLY if it explicitly says `public: true`.
+// Anything else (including routes with no flag at all) requires login.
+const publicRoutes = routes.filter((route) => route.public === true);
+const privateRoutes = routes.filter((route) => route.public !== true);
+
 export default function AppRouter() {
   const { isAuthenticated, userRole } = useContext(AuthContext);
   const location = useLocation();
@@ -51,29 +55,37 @@ export default function AppRouter() {
         )}
 
         <Route path="/login" element={<Login />} />
-   
-        
 
-        {/* All authenticated routes */}
+        {/* PUBLIC pages: the only pages reachable while logged out
+            (routes explicitly flagged `public: true` in routes.jsx) */}
         <Route element={<MainLayout />}>
-          {routes.map((route) => (
+          {publicRoutes.map((route, i) => (
             <Route
-              key={route.path}
+              key={`${route.path}-${i}`}
               path={route.path}
-              element={
-                route.protected ? (
-                  <ProtectedRoute allowedRoles={route.allowedRoles}>
-                    {route.element}
-                  </ProtectedRoute>
-                ) : (
-                  route.element
-                )
-              }
+              element={route.element}
             />
           ))}
         </Route>
 
-        <Route path={allRouterLink.notFound} element={<NotFound />} />
+        {/* EVERYTHING ELSE is behind the global auth gate. Not logged in
+            => redirected to /login, no matter which URL was typed
+            (known pages, role pages, and unknown URLs alike). */}
+        <Route element={<RequireAuth />}>
+          <Route element={<MainLayout />}>
+            {privateRoutes.map((route, i) => (
+              <Route
+                key={`${route.path}-${i}`}
+                path={route.path}
+                element={
+                  <ProtectedRoute allowedRoles={route.allowedRoles}>
+                    {route.element}
+                  </ProtectedRoute>
+                }
+              />
+            ))}
+          </Route>
+        </Route>
       </Routes>
     </ErrorBoundary>
   );

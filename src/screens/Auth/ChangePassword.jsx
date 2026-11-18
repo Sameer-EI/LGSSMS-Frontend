@@ -175,12 +175,6 @@ export const ChangePassword = () => {
                 {loading ? " " : "Change Password"}
               </button>
             </div>
-
-            <div className="text-center mt-4">
-              <Link to="/login" className="text-sm textTheme hover:underline font-medium">
-                <i className="fa-solid fa-arrow-left mr-2"></i> Back to Login
-              </Link>
-            </div>
           </form>
         </div>
       </div>

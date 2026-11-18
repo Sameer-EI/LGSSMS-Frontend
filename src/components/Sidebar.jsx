@@ -32,10 +32,10 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
       />
       <div className="drawer-content"></div>
 
-      <div className="drawer-side">
+      <div className="drawer-side !overflow-y-hidden">
         <label htmlFor="my-drawer" className="drawer-overlay"></label>
 
-        <div className="min-h-full w-72 bg-white dark:bg-gray-900 shadow-lg p-4 border-r border-gray-200 dark:border-gray-700">
+        <div className="h-screen overflow-y-auto overscroll-contain w-72 bg-white dark:bg-gray-900 shadow-lg p-4 border-r border-gray-200 dark:border-gray-700">
           <nav className="space-y-6">
             {/* Dashboard / Home */}
             {isAuthenticated && (
@@ -349,6 +349,23 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
                           </Link>
                         </li>
                       </>
+                    )}
+
+                    {(role === constants.roles.director ||
+                      role === constants.roles.teacher) && (
+                      <li>
+                        <Link
+                          onClick={(e) =>
+                            handleNavigation(e, allRouterLink.StudentMarksFill)
+                          }
+                          className="flex items-center gap-2 px-3 py-2 rounded-md 
+                         hover:bg-blue-100 dark:hover:bg-gray-700 
+                         transition text-gray-800 dark:text-gray-200"
+                        >
+                          <i className="fa-solid fa-fill-drip w-5"></i> Fill
+                          Student Marks
+                        </Link>
+                      </li>
                     )}
                   </ul>
                 </div>
@@ -670,7 +687,7 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
                 </div>
               )}
             {/* Income */}
-            {isAuthenticated &&
+            {/* {isAuthenticated &&
               (role === constants.roles.director ||
                 role === constants.roles.officeStaff) && (
                 <div>
@@ -678,7 +695,6 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
                     Incomes
                   </h3>
                   <ul className="space-y-1">
-                    {/* View Total Incomes */}
                     {(role === constants.roles.director ||
                       role === constants.roles.officeStaff) && (
                       <li>
@@ -697,7 +713,9 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
                     )}
                   </ul>
                 </div>
-              )}
+              )
+              
+              } */}
             {/* Salary */}
             {isAuthenticated &&
               (role === constants.roles.director ||
@@ -768,29 +786,13 @@ export const Sidebar = ({ belowAttendanceCount = 0 }) => {
                         Academic Calendar
                       </Link>
                     </li>
-                    {(role === constants.roles.director ||
-                      role === constants.roles.teacher) && (
-                      <li>
-                        <Link
-                          onClick={(e) =>
-                            handleNavigation(e, allRouterLink.StudentMarksFill)
-                          }
-                          className="flex items-center gap-2 px-3 py-2 rounded-md 
-                         hover:bg-blue-100 dark:hover:bg-gray-700 
-                         transition text-gray-800 dark:text-gray-200"
-                        >
-                          <i className="fa-solid fa-fill-drip w-5"></i> Fill
-                          Student Marks
-                        </Link>
-                      </li>
-                    )}
                     {role === constants.roles.director && (
                       <li>
                         <Link
                           onClick={(e) =>
                             handleNavigation(
                               e,
-                              allRouterLink.ClassTeacherAssign,
+                              allRouterLink.ViewAllocatedClass,
                             )
                           }
                           className="flex items-center gap-2 px-3 py-2 rounded-md 

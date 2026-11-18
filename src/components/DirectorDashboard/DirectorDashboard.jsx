@@ -205,6 +205,16 @@ export const DirectorDashboard = () => {
     (item) => item.count
   );
 
+  // Roles shown in the gender distribution section
+  const genderRoles = [
+    { key: "students", title: "Students" },
+    { key: "teachers", title: "Teachers" },
+    { key: "office_staff", title: "Office Staff" },
+  ];
+
+  // Current school session, e.g. "2026-2027"
+  const currentSession = dashboardData.current_session;
+
   return (
     <div className="p-4 space-y-6 mb-24 md:mb-10">
       <LoginSuccessHandler />
@@ -228,12 +238,30 @@ export const DirectorDashboard = () => {
         .apexcharts-gridline { stroke: ${gridColor} !important; }
       `}</style>
 
-      <h3 className="text-3xl font-bold text-center text-gray-800 dark:text-gray-100">
-        Director Dashboard
-      </h3>
+      {/* HEADER */}
+      <div className="flex flex-col items-center gap-3">
+        <h3 className="text-3xl font-bold text-center text-gray-800 dark:text-gray-100">
+          Director Dashboard
+        </h3>
+
+        {currentSession && (
+          <div
+            className="inline-flex items-center gap-2 rounded-full border borderTheme bg-white dark:bg-gray-800 dark:border-gray-700 px-4 py-1.5 shadow-sm"
+            title="Current school session"
+          >
+            <i className="fa-solid fa-calendar-days text-sm text-gray-500 dark:text-gray-400"></i>
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              Current Session
+            </span>
+            <span className="rounded-full bgTheme px-3 py-0.5 text-sm font-semibold text-white">
+              {currentSession}
+            </span>
+          </div>
+        )}
+      </div>
 
       {/* SUMMARY CARDS */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         {Object.entries(dashboardData.summary || {}).map(([key, value]) => (
           <div
             key={key}
@@ -261,10 +289,14 @@ export const DirectorDashboard = () => {
       </div>
 
       {/* GENDER DISTRIBUTION */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {["students", "teachers"].map((role) => {
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {genderRoles.map(({ key: role, title }) => {
           const data = dashboardData.gender_distribution?.[role];
           if (!data) return null;
+
+          const male = data.count?.male ?? 0;
+          const female = data.count?.female ?? 0;
+          const hasData = male + female > 0;
 
           return (
             <div
@@ -272,24 +304,33 @@ export const DirectorDashboard = () => {
               className="border rounded-lg shadow-lg overflow-hidden transition-all hover:shadow-xl borderTheme bg-white dark:bg-gray-800 dark:border-gray-700"
             >
               <div className="p-4 bgTheme text-white text-center">
-                <h2 className="text-xl font-bold capitalize">
-                  Gender Distribution - {role}
+                <h2 className="text-xl font-bold">
+                  Gender Distribution - {title}
                 </h2>
               </div>
               <div className="p-4">
-                <Chart
-                  key={`${role}-${chartKey}`}
-                  height={height}
-                  type="pie"
-                  width="100%"
-                  options={{
-                    ...baseChartOptions,
-                    labels: ["Male", "Female"],
-                    colors: [constants.usColor, constants.canadaPink],
-                    stroke: { colors: [isDark ? "#1f2937" : "#ffffff"] },
-                  }}
-                  series={[data.count.male, data.count.female]}
-                />
+                {hasData ? (
+                  <Chart
+                    key={`${role}-${chartKey}`}
+                    height={height}
+                    type="pie"
+                    width="100%"
+                    options={{
+                      ...baseChartOptions,
+                      labels: ["Male", "Female"],
+                      colors: [constants.usColor, constants.canadaPink],
+                      stroke: { colors: [isDark ? "#1f2937" : "#ffffff"] },
+                    }}
+                    series={[male, female]}
+                  />
+                ) : (
+                  <div
+                    className="flex items-center justify-center text-gray-500 dark:text-gray-400"
+                    style={{ height }}
+                  >
+                    No data available
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -367,7 +408,10 @@ export const DirectorDashboard = () => {
         {/* Class Strength */}
         <div className="border rounded-lg shadow-lg overflow-hidden transition-all hover:shadow-xl borderTheme bg-white dark:bg-gray-800 dark:border-gray-700">
           <div className="p-4 bgTheme text-white text-center">
-            <h2 className="text-xl font-bold">Class Strength</h2>
+            <h2 className="text-xl font-bold">
+              Class Strength
+              {currentSession ? ` (${currentSession})` : ""}
+            </h2>
           </div>
           <div className="p-4">
             <Chart

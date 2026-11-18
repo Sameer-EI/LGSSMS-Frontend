@@ -489,17 +489,19 @@ const StudentAttendanceRegister = () => {
         console.warn("Teacher dashboard unavailable:", dashRes.reason);
       }
 
-      // Best-guess "home" class from the dashboard, falling back to a
-      // year level id stashed in localStorage.
+      // Best-guess "home" class from the dashboard.
       const assignedName = dash?.class_summary?.[0]?.level_name;
       let match = assignedName
         ? allLevels.find(
             (l) => normalize(getLevelName(l)) === normalize(assignedName),
           )
         : null;
-      if (!match) {
+
+      // Only trust the localStorage fallback when the dashboard could not be
+      // loaded. If the dashboard loaded and says "no classes", respect that.
+      if (!match && !dash) {
         const storedId = getTeacherYearLevelId();
-        match = allLevels.find((l) => l.id === storedId);
+        match = allLevels.find((l) => l.id === storedId) || null;
       }
 
       if (canMarkAnyClass) {
@@ -508,10 +510,10 @@ const StudentAttendanceRegister = () => {
         setYearLevels(allLevels);
         setSelectedClass(match ? match.id : allLevels[0].id);
       } else {
-        // Teacher: locked to their own allocated class only.
-        const assignedLevel = match ? [match] : allLevels.slice(0, 1);
-        setYearLevels(assignedLevel);
-        setSelectedClass(assignedLevel[0]?.id ?? null);
+        // Teacher: ONLY their allocated class. No allocation = no class
+        // (no silent fallback to the first level / Nursery).
+        setYearLevels(match ? [match] : []);
+        setSelectedClass(match ? match.id : null);
       }
 
       setLoading(false);
@@ -832,6 +834,22 @@ const StudentAttendanceRegister = () => {
         <i className="fa-solid fa-triangle-exclamation text-5xl text-red-400 mb-4"></i>
         <p className="text-lg text-red-400 font-medium">
           Failed to load data, Try Again
+        </p>
+      </div>
+    );
+  }
+
+  // --- Teacher with no allocated class ---
+  if (!canMarkAnyClass && !selectedClass) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-6">
+        <i className="fa-solid fa-chalkboard-user text-5xl text-gray-400 dark:text-gray-500 mb-4"></i>
+        <h3 className="text-xl font-bold text-gray-800 dark:text-gray-100">
+          No class allocated
+        </h3>
+        <p className="mt-2 max-w-sm text-sm text-gray-500 dark:text-gray-400">
+          You are not allocated to any class yet. Please contact the school
+          office to get a class assigned.
         </p>
       </div>
     );

@@ -4,31 +4,47 @@ import axios from "axios";
 import { constants } from "../../global/constants";
 import PaymentStatusDialog from "./PaymentStatusDialog";
 import PaymentStatusDialogOffline from "./PaymentStatusDialogOffline";
-import { fetchSchoolYear, fetchStudents1 } from "../../services/api/Api";
+import { fetchSchoolYear } from "../../services/api/Api";
 import ReceiptModal from "./ReceiptModal";
 import { AuthContext } from "../../context/AuthContext";
 
-// ----- Helper: Format date with current time to ISO format (YYYY-MM-DDTHH:MM:SS) -----
-const formatDateWithCurrentTime = (dateString) => {
-  if (!dateString) return null;
-  
-  const now = new Date();
-  const dateObj = new Date(dateString);
-  dateObj.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), 0);
-  
-  if (isNaN(dateObj.getTime())) return null;
-  
-  const year = dateObj.getFullYear();
-  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-  const day = String(dateObj.getDate()).padStart(2, '0');
-  const hours = String(dateObj.getHours()).padStart(2, '0');
-  const minutes = String(dateObj.getMinutes()).padStart(2, '0');
-  const seconds = String(dateObj.getSeconds()).padStart(2, '0');
-  
-  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+/* ========================================================================== */
+/*  Helpers                                                                   */
+/* ========================================================================== */
+
+const pad = (n) => String(n).padStart(2, "0");
+
+// Today's date in the user's LOCAL timezone as YYYY-MM-DD
+// (toISOString() would return the UTC date and can be off by one day).
+const getTodayString = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 };
 
-// ----- Helper: each month as separate group (no grouping) -----
+// Format a YYYY-MM-DD date + current time to ISO-like format (YYYY-MM-DDTHH:MM:SS)
+const formatDateWithCurrentTime = (dateString) => {
+  if (!dateString) return null;
+  const [y, m, d] = dateString.split("-").map(Number);
+  if (!y || !m || !d) return null;
+
+  const now = new Date();
+  const dateObj = new Date(y, m - 1, d, now.getHours(), now.getMinutes(), now.getSeconds(), 0);
+  if (isNaN(dateObj.getTime())) return null;
+
+  return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}T${pad(
+    dateObj.getHours()
+  )}:${pad(dateObj.getMinutes())}:${pad(dateObj.getSeconds())}`;
+};
+
+const inr = (n) => `₹${(Number(n) || 0).toFixed(2)}`;
+
+// Rounds to 2 decimals (avoids float noise like 33.300000000000004)
+const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+// Allows "", "10", "10.", "10.5", ".5" (max 2 decimals) while the user is typing
+const isAmountTyping = (v) => /^\d*\.?\d{0,2}$/.test(v);
+
+// Each month as a separate group (no grouping)
 const getMonthlyGroups = (months) => {
   const groups = [];
   months.forEach((monthData) => {
@@ -47,56 +63,250 @@ const getMonthlyGroups = (months) => {
   return groups;
 };
 
-// ----- Helper: Get all monthly groups from available fees (including all months) -----
+// All monthly groups from available fees (including all months)
 const getAllMonthlyGroups = (availableFees) => {
-  const groups = [];
-  if (!availableFees || availableFees.length === 0) return groups;
-  
-  availableFees.forEach((monthData) => {
-    monthData.fees.forEach((fee) => {
-      if (fee.fee_type && fee.fee_type.toLowerCase().includes("tuition")) {
-        groups.push({
-          id: `month-${monthData.month}-${fee.fee_id}`,
-          label: monthData.month,
-          count: 1,
-          monthNames: [monthData.month],
-          fee: fee,
-        });
-      }
-    });
-  });
-  return groups;
+  if (!availableFees || availableFees.length === 0) return [];
+  return getMonthlyGroups(availableFees);
 };
 
-// ----- Helper: Extract month name and year from "Month Year" format -----
+// Extract month name and year from "Month Year" format
 const parseMonthYear = (monthYearStr) => {
   if (!monthYearStr) return { month: "", year: "" };
-  const parts = monthYearStr.trim().split(' ');
+  const parts = monthYearStr.trim().split(" ");
   const month = parts[0] || "";
   const year = parts.length > 1 ? parts[1] : "";
   return { month, year };
 };
 
-// ----- Helper: Check if two month strings match -----
+// Check if two month strings match
 const doMonthsMatch = (month1, month2) => {
   if (!month1 || !month2) return false;
   const parsed1 = parseMonthYear(month1);
   const parsed2 = parseMonthYear(month2);
   if (parsed1.year && parsed2.year) {
-    const year1 = parsed1.year.padStart(4, '20');
-    const year2 = parsed2.year.padStart(4, '20');
+    const year1 = parsed1.year.padStart(4, "20");
+    const year2 = parsed2.year.padStart(4, "20");
     if (year1 !== year2) return false;
   }
   return parsed1.month.toLowerCase() === parsed2.month.toLowerCase();
 };
 
-// ----- Helper: Check if a month is selected -----
+// Check if a month is selected
 const isMonthSelected = (monthFromData, selectedMonths) => {
   if (!monthFromData || !selectedMonths || selectedMonths.length === 0) return false;
-  return selectedMonths.some(selectedMonth => {
-    return doMonthsMatch(monthFromData, selectedMonth);
-  });
+  return selectedMonths.some((selectedMonth) => doMonthsMatch(monthFromData, selectedMonth));
 };
+
+/* ========================================================================== */
+/*  Small presentational components                                           */
+/* ========================================================================== */
+
+const Loader = ({ label = "Loading data..." }) => (
+  <div className="flex flex-col items-center justify-center py-10">
+    <div className="flex space-x-2">
+      <div className="h-3 w-3 animate-bounce rounded-full bgTheme"></div>
+      <div className="h-3 w-3 animate-bounce rounded-full bgTheme [animation-delay:-0.2s]"></div>
+      <div className="h-3 w-3 animate-bounce rounded-full bgTheme [animation-delay:-0.4s]"></div>
+    </div>
+    <p className="mt-3 text-sm text-base-content/60">{label}</p>
+  </div>
+);
+
+const StatusBadge = ({ status }) => {
+  const cls =
+    status === "Paid"
+      ? "badge-success"
+      : status === "Partial"
+        ? "badge-warning"
+        : "badge-error";
+  const text = status === "Paid" || status === "Partial" ? status : "Pending";
+  return <span className={`badge badge-outline badge-sm whitespace-nowrap ${cls}`}>{text}</span>;
+};
+
+const SectionCard = ({ icon, title, subtitle, action, children }) => (
+  <section className="rounded-2xl border border-base-300 bg-base-100 shadow-sm">
+    <header className="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 px-4 py-3 sm:px-6 sm:py-4">
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+          <i className={`fa-solid ${icon}`}></i>
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold sm:text-lg">{title}</h2>
+          {subtitle && <p className="text-xs text-base-content/60 sm:text-sm">{subtitle}</p>}
+        </div>
+      </div>
+      {action}
+    </header>
+    <div className="p-4 sm:p-6">{children}</div>
+  </section>
+);
+
+const Field = ({ label, icon, required, error, hint, className = "", children }) => (
+  <div className={`form-control w-full ${className}`}>
+    <label className="mb-1.5 flex items-center gap-2 text-sm font-medium text-base-content/80">
+      {icon && <i className={`fa-solid ${icon} text-xs text-base-content/50`}></i>}
+      <span>{label}</span>
+      {required && <span className="text-error">*</span>}
+    </label>
+    {children}
+    {error ? (
+      <p className="mt-1 text-xs text-error">{error}</p>
+    ) : hint ? (
+      <div className="mt-1 text-xs text-base-content/60">{hint}</div>
+    ) : null}
+  </div>
+);
+
+const InfoTile = ({ icon, iconColor, label, children }) => (
+  <div className="rounded-xl border border-base-300 bg-base-200/60 p-3 sm:p-4">
+    <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-base-content/60">
+      <i className={`fa-solid ${icon} ${iconColor}`}></i>
+      {label}
+    </p>
+    <div className="mt-1.5 break-words text-sm font-medium sm:text-base">{children}</div>
+  </div>
+);
+
+/**
+ * Fee list: a proper table on md+ screens, stacked cards on mobile.
+ * rows: { id, label, feeType, original, paid, due, status, isPaid, selected,
+ *         onToggle, collectAmount, onCollectChange, inputDisabled }
+ * The "amount to collect" inputs are text inputs (inputMode="decimal") so that
+ * values like "10." or "10.5" can be typed without the browser/React resetting them.
+ */
+const FeeList = ({ rows, showSelect = false, firstColumnLabel = null }) => (
+  <>
+    {/* Desktop / tablet table */}
+    <div className="hidden overflow-x-auto rounded-xl border border-base-300 md:block">
+      <table className="table w-full">
+        <thead className="bg-base-200 text-xs uppercase tracking-wide">
+          <tr>
+            {showSelect && <th className="w-12"></th>}
+            {firstColumnLabel && <th>{firstColumnLabel}</th>}
+            <th>Fee Type</th>
+            <th className="text-right">Original</th>
+            <th className="text-right">Paid</th>
+            <th className="text-right">Due</th>
+            <th>Status</th>
+            <th className="text-right">Amount to Collect</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.id} className="hover">
+              {showSelect && (
+                <td>
+                  <input
+                    type="checkbox"
+                    className="checkbox checkbox-primary checkbox-sm"
+                    checked={row.selected}
+                    onChange={row.onToggle}
+                    disabled={row.isPaid}
+                    aria-label={`Select ${row.feeType}`}
+                  />
+                </td>
+              )}
+              {firstColumnLabel && <td className="whitespace-nowrap font-semibold">{row.label}</td>}
+              <td className="font-medium">{row.feeType}</td>
+              <td className="text-right tabular-nums">{inr(row.original)}</td>
+              <td className="text-right tabular-nums">{inr(row.paid)}</td>
+              <td className={`text-right tabular-nums ${row.due > 0 ? "font-semibold text-warning" : ""}`}>
+                {inr(row.due)}
+              </td>
+              <td>
+                <StatusBadge status={row.status} />
+              </td>
+              <td>
+                <div className="flex flex-col items-end gap-0.5">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    className="input input-bordered input-sm w-28 text-right focus:outline-none"
+                    value={row.collectAmount}
+                    onChange={(e) => row.onCollectChange(e.target.value)}
+                    disabled={row.inputDisabled}
+                    aria-label={`Amount to collect for ${row.feeType}`}
+                  />
+                  {row.due > 0 && (
+                    <span className="text-[11px] text-base-content/50">max ₹{row.due.toFixed(2)}</span>
+                  )}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    {/* Mobile cards */}
+    <div className="space-y-3 md:hidden">
+      {rows.map((row) => (
+        <div
+          key={row.id}
+          className={`rounded-xl border p-3 transition-colors ${
+            showSelect && row.selected ? "border-primary/50 bg-primary/5" : "border-base-300 bg-base-100"
+          }`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              {showSelect && (
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-primary mt-0.5"
+                  checked={row.selected}
+                  onChange={row.onToggle}
+                  disabled={row.isPaid}
+                  aria-label={`Select ${row.feeType}`}
+                />
+              )}
+              <div className="min-w-0">
+                <p className="break-words font-semibold">{row.label || row.feeType}</p>
+                {row.label && <p className="break-words text-xs text-base-content/60">{row.feeType}</p>}
+              </div>
+            </div>
+            <StatusBadge status={row.status} />
+          </div>
+
+          <dl className="mt-3 grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-lg bg-base-200 px-1 py-2">
+              <dt className="text-[11px] uppercase tracking-wide text-base-content/60">Original</dt>
+              <dd className="text-sm font-medium tabular-nums">{inr(row.original)}</dd>
+            </div>
+            <div className="rounded-lg bg-base-200 px-1 py-2">
+              <dt className="text-[11px] uppercase tracking-wide text-base-content/60">Paid</dt>
+              <dd className="text-sm font-medium tabular-nums">{inr(row.paid)}</dd>
+            </div>
+            <div className="rounded-lg bg-base-200 px-1 py-2">
+              <dt className="text-[11px] uppercase tracking-wide text-base-content/60">Due</dt>
+              <dd className={`text-sm font-semibold tabular-nums ${row.due > 0 ? "text-warning" : ""}`}>
+                {inr(row.due)}
+              </dd>
+            </div>
+          </dl>
+
+          <div className="mt-3">
+            <label className="mb-1 flex items-center justify-between text-xs font-medium text-base-content/70">
+              <span>Amount to collect</span>
+              {row.due > 0 && <span className="text-base-content/50">max ₹{row.due.toFixed(2)}</span>}
+            </label>
+            <input
+              type="text"
+              inputMode="decimal"
+              className="input input-bordered w-full text-base focus:outline-none"
+              value={row.collectAmount}
+              onChange={(e) => row.onCollectChange(e.target.value)}
+              disabled={row.inputDisabled}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  </>
+);
+
+/* ========================================================================== */
+/*  Main component                                                            */
+/* ========================================================================== */
 
 export const AdmissionFees = () => {
   const [students, setStudents] = useState([]);
@@ -130,7 +340,9 @@ export const AdmissionFees = () => {
   const [selectedMonths, setSelectedMonths] = useState([]);
   const [annualCollectAmounts, setAnnualCollectAmounts] = useState({});
   const [manualPaidAmount, setManualPaidAmount] = useState("");
-  const [paymentDate, setPaymentDate] = useState("");
+
+  // Payment date now defaults to TODAY (local date)
+  const [paymentDate, setPaymentDate] = useState(getTodayString());
 
   const [parentName, setParentName] = useState("");
   const [grade, setGrade] = useState("");
@@ -139,7 +351,7 @@ export const AdmissionFees = () => {
   const [termTo, setTermTo] = useState("");
   const [studentStream, setStudentStream] = useState("");
   const [sessionMonths, setSessionMonths] = useState([]);
-  
+
   const [advancePaymentData, setAdvancePaymentData] = useState(null);
   const [showAdvancePaymentDialog, setShowAdvancePaymentDialog] = useState(false);
 
@@ -172,13 +384,13 @@ export const AdmissionFees = () => {
 
   const getClassLabel = () => {
     if (!selectedClassId) return "";
-    const cls = classes.find(c => c.id === parseInt(selectedClassId));
+    const cls = classes.find((c) => c.id === parseInt(selectedClassId));
     return cls ? cls.level_name : "";
   };
 
   const getTermMonths = () => {
     if (!selectedSchYear) return { from: "July", to: "June" };
-    const sy = schoolYear.find(s => s.id === parseInt(selectedSchYear));
+    const sy = schoolYear.find((s) => s.id === parseInt(selectedSchYear));
     if (!sy || !sy.year_name) return { from: "July", to: "June" };
     const years = sy.year_name.match(/\d{4}/g) || [];
     const startYear = years[0] || new Date().getFullYear();
@@ -191,21 +403,21 @@ export const AdmissionFees = () => {
 
   const getSchoolYearName = () => {
     if (!selectedSchYear) return "";
-    const sy = schoolYear.find(s => s.id === parseInt(selectedSchYear));
+    const sy = schoolYear.find((s) => s.id === parseInt(selectedSchYear));
     return sy ? sy.year_name : "";
   };
 
   const isClass11Or12 = () => {
     if (!selectedClassId) return false;
-    const cls = classes.find(c => c.id === parseInt(selectedClassId));
+    const cls = classes.find((c) => c.id === parseInt(selectedClassId));
     if (!cls || !cls.level_name) return false;
     const levelName = cls.level_name.toLowerCase();
     return levelName.includes("class 11") || levelName.includes("class 12");
   };
 
-  const getStreamFromSection = (section) => {
-    if (!section) return null;
-    const sectionUpper = section.toUpperCase().trim();
+  const getStreamFromSection = (sectionValue) => {
+    if (!sectionValue) return null;
+    const sectionUpper = sectionValue.toUpperCase().trim();
     const streams = ["PCM", "PCB", "COMM", "ARTS", "HUMANITIES", "SCIENCE", "COMMERCE"];
     for (const stream of streams) {
       if (sectionUpper.includes(stream) || sectionUpper === stream) {
@@ -223,7 +435,7 @@ export const AdmissionFees = () => {
     const endYear = parseInt(years[1]);
     const allMonths = [
       "January", "February", "March", "April", "May", "June",
-      "July", "August", "September", "October", "November", "December"
+      "July", "August", "September", "October", "November", "December",
     ];
     const sessionMonthsList = [];
     for (let i = 6; i < 12; i++) {
@@ -233,6 +445,15 @@ export const AdmissionFees = () => {
       sessionMonthsList.push(`${allMonths[i]} ${endYear}`);
     }
     return sessionMonthsList;
+  };
+
+  // Clears fee selections and puts the payment date back to today
+  const resetFeeSelections = () => {
+    setSelectedFeeIds([]);
+    setSelectedGroups({});
+    setAnnualCollectAmounts({});
+    setManualPaidAmount("");
+    setPaymentDate(getTodayString());
   };
 
   const fetchReceipt = async (receiptNumber) => {
@@ -264,12 +485,9 @@ export const AdmissionFees = () => {
     let annualTotal = 0;
     annualFees.forEach((fee) => {
       if (selectedFeeIds.includes(fee.fee_id)) {
-        const collectAmount = annualCollectAmounts[fee.fee_id];
-        if (collectAmount !== undefined && collectAmount !== null && collectAmount > 0) {
-          annualTotal += parseFloat(collectAmount);
-        } else {
-          annualTotal += parseFloat(fee.due_amount) || 0;
-        }
+        const raw = annualCollectAmounts[fee.fee_id];
+        // not edited yet -> whole due; edited (even to 0 / "") -> exactly what was typed
+        annualTotal += raw === undefined ? parseFloat(fee.due_amount) || 0 : parseFloat(raw) || 0;
       }
     });
     let monthlyTotal = 0;
@@ -286,8 +504,7 @@ export const AdmissionFees = () => {
         }
       }
     });
-    const total = annualTotal + monthlyTotal;
-    return parseFloat(total.toFixed(2));
+    return round2(annualTotal + monthlyTotal);
   };
 
   useEffect(() => {
@@ -299,8 +516,8 @@ export const AdmissionFees = () => {
         const stream = getStreamFromSection(sectionFromStudent);
         if (stream) {
           setStudentStream(stream);
-          // Do not fetch here — fetching is handled by the effect that
-          // watches `studentYearId`, `selectedSchYear`, and `studentStream`.
+          // Fetching is handled by the effect that watches
+          // `studentYearId`, `selectedSchYear`, and `studentStream`.
         } else {
           setStudentStream("");
         }
@@ -324,10 +541,7 @@ export const AdmissionFees = () => {
   const filteredAvailableFees = useMemo(() => {
     if (!availableFees || availableFees.length === 0) return [];
     if (selectedMonths.length === 0) return [];
-    return availableFees.filter(monthData => {
-      const matches = isMonthSelected(monthData.month, selectedMonths);
-      return matches;
-    });
+    return availableFees.filter((monthData) => isMonthSelected(monthData.month, selectedMonths));
   }, [availableFees, selectedMonths]);
 
   const monthlyGroups = useMemo(() => getMonthlyGroups(filteredAvailableFees), [filteredAvailableFees]);
@@ -364,7 +578,7 @@ export const AdmissionFees = () => {
     }
     // prevent rapid duplicate fetches for same params
     try {
-      const key = `${studentId}_${selectedSchYear}_${stream || ''}`;
+      const key = `${studentId}_${selectedSchYear}_${stream || ""}`;
       const now = Date.now();
       if (lastFetchKeyRef.current === key && now - (lastFetchTimeRef.current || 0) < 1000) {
         return [];
@@ -381,7 +595,7 @@ export const AdmissionFees = () => {
         url += `&stream=${encodeURIComponent(stream)}`;
       }
       const feePreviewRes = await axiosInstance.get(url);
-      if (feePreviewRes.data && typeof feePreviewRes.data === 'object') {
+      if (feePreviewRes.data && typeof feePreviewRes.data === "object") {
         const data = feePreviewRes.data;
         if (data.student) {
           if (data.student.father_name) {
@@ -434,8 +648,11 @@ export const AdmissionFees = () => {
       const response = await axiosInstance.get(
         `${BASE_URL}/s/studentyearlevels/?year__year_name=${encodeURIComponent(schoolYearName)}&level__id=${selectedClassId}`
       );
-      const studentData = Array.isArray(response.data) ? response.data :
-        (response.data.results ? response.data.results : []);
+      const studentData = Array.isArray(response.data)
+        ? response.data
+        : response.data.results
+          ? response.data.results
+          : [];
       setStudents(studentData);
     } catch (err) {
       console.log(err);
@@ -460,35 +677,52 @@ export const AdmissionFees = () => {
     getSchool_year();
   }, []);
 
-  const handleClassChange = (e) => {
-    const classId = e.target.value;
-    setSelectedClassId(classId);
+  // Clears the chosen student and everything that depends on it
+  const resetStudentState = () => {
     reset({
       student_id: "",
       month: "",
       paid_amount: "",
       payment_mode: "",
+      cheque_number: "",
       remarks: "",
       received_by: "",
     });
-    setSelectedFeeIds([]);
     setSelectedStudent(null);
     setStudentYearId(null);
     setAvailableFees([]);
     setAnnualFees([]);
     setApiError("");
     setSelectedStudentName("");
-    setSelectedGroups({});
     setStudents([]);
     setStudentStream("");
     setSection("");
     setParentName("");
     setSelectedMonths([]);
-    setAnnualCollectAmounts({});
-    setManualPaidAmount("");
     setAdvancePaymentData(null);
     setShowAdvancePaymentDialog(false);
-    setPaymentDate("");
+    resetFeeSelections();
+  };
+
+  const handleSchoolYearChange = (e) => {
+    setselectedSchYear(e.target.value);
+    resetStudentState();
+  };
+
+  const handleClassChange = (e) => {
+    setSelectedClassId(e.target.value);
+    resetStudentState();
+  };
+
+  const handleRetry = () => {
+    setApiError("");
+    getClasses();
+    getSchool_year();
+    if (selectedSchYear && selectedClassId) getStudentsBySchoolYearAndClass();
+    if (studentYearId) {
+      lastFetchKeyRef.current = null;
+      fetchAvailableFees(studentYearId, studentStream || null);
+    }
   };
 
   useEffect(() => {
@@ -545,22 +779,14 @@ export const AdmissionFees = () => {
   // Reset fee selections when stream changes (user selected a manual stream)
   useEffect(() => {
     if (studentStream) {
-      setSelectedFeeIds([]);
-      setSelectedGroups({});
-      setAnnualCollectAmounts({});
-      setManualPaidAmount("");
-      setPaymentDate("");
+      resetFeeSelections();
     }
   }, [studentStream]);
 
   useEffect(() => {
-    setSelectedFeeIds([]);
-    setSelectedGroups({});
-    setAnnualCollectAmounts({});
-    setManualPaidAmount("");
+    resetFeeSelections();
     setAdvancePaymentData(null);
     setShowAdvancePaymentDialog(false);
-    setPaymentDate("");
   }, [studentYearId, selectedSchYear]);
 
   const role = localStorage.getItem("userRole");
@@ -577,7 +803,7 @@ export const AdmissionFees = () => {
       monthlyGroups.forEach((group) => {
         if (!selectedGroups[group.id]) {
           shouldUpdate = true;
-          const due = parseFloat(group.fee.due_amount) || 0;
+          const due = round2(parseFloat(group.fee.due_amount) || 0);
           newGroups[group.id] = {
             checked: true,
             collectAmount: due,
@@ -587,7 +813,7 @@ export const AdmissionFees = () => {
         }
       });
       if (shouldUpdate) {
-        setSelectedGroups(prev => ({ ...prev, ...newGroups }));
+        setSelectedGroups((prev) => ({ ...prev, ...newGroups }));
       }
     }
   }, [monthlyGroups]);
@@ -596,10 +822,10 @@ export const AdmissionFees = () => {
     if (annualFees.length > 0) {
       const initialCollectAmounts = {};
       annualFees.forEach((fee) => {
-        const due = parseFloat(fee.due_amount) || 0;
+        const due = round2(parseFloat(fee.due_amount) || 0);
         initialCollectAmounts[fee.fee_id] = due;
       });
-      setAnnualCollectAmounts(prev => {
+      setAnnualCollectAmounts((prev) => {
         if (Object.keys(prev).length === 0) {
           return initialCollectAmounts;
         }
@@ -609,54 +835,34 @@ export const AdmissionFees = () => {
   }, [annualFees]);
 
   const handleAnnualFeeSelect = (feeId) => {
-    setSelectedFeeIds(prev => {
-      if (prev.includes(feeId)) {
-        return prev.filter(id => id !== feeId);
-      } else {
-        return [...prev, feeId];
-      }
-    });
+    setSelectedFeeIds((prev) =>
+      prev.includes(feeId) ? prev.filter((id) => id !== feeId) : [...prev, feeId]
+    );
   };
 
   const handleSelectAllAnnualFees = () => {
     if (selectedFeeIds.length === annualFees.length) {
       setSelectedFeeIds([]);
     } else {
-      const allFeeIds = annualFees.map(fee => fee.fee_id);
-      setSelectedFeeIds(allFeeIds);
+      setSelectedFeeIds(annualFees.map((fee) => fee.fee_id));
     }
   };
 
+  // Keeps the typed text as-is (so "10." / ".5" work) and caps it at the due amount
   const handleAnnualCollectChange = (feeId, value) => {
-    const fee = annualFees.find(f => f.fee_id === feeId);
+    if (!isAmountTyping(value)) return;
+    const fee = annualFees.find((f) => f.fee_id === feeId);
     if (!fee) return;
-    const due = parseFloat(fee.due_amount) || 0;
-    if (value === '' || value === null || value === undefined) {
-      setAnnualCollectAmounts(prev => ({
-        ...prev,
-        [feeId]: 0,
-      }));
-      return;
-    }
-    const inputValue = parseFloat(value);
-    if (isNaN(inputValue)) {
-      return;
-    }
-    const collectAmount = Math.min(Math.max(0, inputValue), due);
-    setAnnualCollectAmounts(prev => ({
-      ...prev,
-      [feeId]: collectAmount,
-    }));
+    const due = round2(parseFloat(fee.due_amount) || 0);
+    const num = parseFloat(value);
+    const next = !isNaN(num) && num > due ? String(due) : value;
+    setAnnualCollectAmounts((prev) => ({ ...prev, [feeId]: next }));
   };
 
   const handleMonthSelection = (month) => {
-    setSelectedMonths(prev => {
-      if (prev.includes(month)) {
-        return prev.filter(m => m !== month);
-      } else {
-        return [...prev, month];
-      }
-    });
+    setSelectedMonths((prev) =>
+      prev.includes(month) ? prev.filter((m) => m !== month) : [...prev, month]
+    );
   };
 
   const handleSelectAllMonths = () => {
@@ -668,34 +874,16 @@ export const AdmissionFees = () => {
   };
 
   const handleGroupCollectChange = (groupId, value) => {
+    if (!isAmountTyping(value)) return;
     const group = monthlyGroups.find((g) => g.id === groupId);
     if (!group) return;
-    const due = parseFloat(group.fee.due_amount) || 0;
-    if (value === '' || value === null || value === undefined) {
-      setSelectedGroups((prev) => ({
-        ...prev,
-        [groupId]: {
-          ...prev[groupId],
-          collectAmount: 0,
-        },
-      }));
-      return;
-    }
-    const inputValue = parseFloat(value);
-    if (isNaN(inputValue)) {
-      return;
-    }
-    const collectAmount = Math.min(Math.max(0, inputValue), due);
-    setSelectedGroups((prev) => {
-      const updated = {
-        ...prev,
-        [groupId]: {
-          ...prev[groupId],
-          collectAmount: collectAmount,
-        },
-      };
-      return updated;
-    });
+    const due = round2(parseFloat(group.fee.due_amount) || 0);
+    const num = parseFloat(value);
+    const next = !isNaN(num) && num > due ? String(due) : value;
+    setSelectedGroups((prev) => ({
+      ...prev,
+      [groupId]: { ...prev[groupId], collectAmount: next },
+    }));
   };
 
   useEffect(() => {
@@ -713,6 +901,7 @@ export const AdmissionFees = () => {
 
   const handlePaidAmountChange = (e) => {
     const value = e.target.value;
+    if (!isAmountTyping(value)) return;
     setManualPaidAmount(value);
     setValue("paid_amount", value, {
       shouldValidate: true,
@@ -721,9 +910,7 @@ export const AdmissionFees = () => {
   };
 
   const onSubmit = async (data) => {
-    const annualSelected = annualFees.filter((fee) =>
-      selectedFeeIds.includes(fee.fee_id)
-    );
+    const annualSelected = annualFees.filter((fee) => selectedFeeIds.includes(fee.fee_id));
     const allMonthlyGroups = getAllMonthlyGroups(availableFees);
     const monthlySelected = allMonthlyGroups.filter(
       (g) => selectedGroups[g.id] && selectedGroups[g.id].checked
@@ -735,7 +922,7 @@ export const AdmissionFees = () => {
     const paymentMode = data.payment_mode.toLowerCase();
     const chequeNumber = data.cheque_number || "";
     const schoolYearId = selectedSchYear;
-    const paidAmount = parseFloat(data.paid_amount) || 0;
+    const paidAmount = round2(parseFloat(data.paid_amount) || 0);
     const totalPayable = calculateTotalAmount();
     if (!selectedStudent || !studentYearId) {
       alert("Please select a student.");
@@ -750,7 +937,7 @@ export const AdmissionFees = () => {
       return;
     }
     if (paidAmount > totalPayable) {
-      const advanceAmount = paidAmount - totalPayable;
+      const advanceAmount = round2(paidAmount - totalPayable);
       setAdvancePaymentData({
         advanceAmount,
         totalPayable,
@@ -761,55 +948,74 @@ export const AdmissionFees = () => {
         annualSelected,
         monthlySelected,
         data,
-        paymentDate
+        paymentDate,
       });
       setShowAdvancePaymentDialog(true);
       return;
     }
-    await processPayment(paymentMode, chequeNumber, schoolYearId, paidAmount, annualSelected, monthlySelected, data, null, paymentDate);
+    await processPayment(
+      paymentMode,
+      chequeNumber,
+      schoolYearId,
+      paidAmount,
+      annualSelected,
+      monthlySelected,
+      data,
+      null,
+      paymentDate
+    );
   };
 
-  const processPayment = async (paymentMode, chequeNumber, schoolYearId, paidAmount, annualSelected, monthlySelected, data, advanceAdjustment = null, paymentDateParam = null) => {
+  const processPayment = async (
+    paymentMode,
+    chequeNumber,
+    schoolYearId,
+    paidAmount,
+    annualSelected,
+    monthlySelected,
+    data,
+    advanceAdjustment = null,
+    paymentDateParam = null
+  ) => {
     const fees = [];
-    let remainingAmount = paidAmount;
+    let remainingAmount = round2(paidAmount);
+
     annualSelected.forEach((fee) => {
-      const dueAmount = parseFloat(annualCollectAmounts[fee.fee_id]) || 0;
-      if (dueAmount > 0 && remainingAmount > 0) {
-        const amountToPay = Math.min(dueAmount, remainingAmount);
-        if (amountToPay > 0) {
-          fees.push({
-            fee_type_id: fee.fee_id,
-            month: null,
-            amount: amountToPay,
-          });
-          remainingAmount -= amountToPay;
-        }
+      const dueAmount = round2(parseFloat(annualCollectAmounts[fee.fee_id]) || 0);
+      const amountToPay = round2(Math.min(dueAmount, remainingAmount));
+      if (amountToPay > 0) {
+        fees.push({
+          fee_type_id: fee.fee_id,
+          month: null,
+          amount: amountToPay,
+        });
+        remainingAmount = round2(remainingAmount - amountToPay);
       }
     });
+
     monthlySelected.forEach((group) => {
       const sel = selectedGroups[group.id];
-      const dueAmount = parseFloat(sel.collectAmount) || 0;
-      if (dueAmount > 0 && remainingAmount > 0) {
-        const amountToPay = Math.min(dueAmount, remainingAmount);
-        if (amountToPay > 0) {
-          const monthMap = {
-            "January": 1, "February": 2, "March": 3, "April": 4,
-            "May": 5, "June": 6, "July": 7, "August": 8,
-            "September": 9, "October": 10, "November": 11, "December": 12
-          };
-          const monthName = group.monthNames[0]?.split(' ')[0] || "";
-          const monthId = monthMap[monthName] || 0;
-          if (monthId >= 1 && monthId <= 12) {
-            fees.push({
-              fee_type_id: group.fee.fee_id,
-              month: monthId,
-              amount: amountToPay,
-            });
-            remainingAmount -= amountToPay;
-          }
+      const dueAmount = round2(parseFloat(sel.collectAmount) || 0);
+      const amountToPay = round2(Math.min(dueAmount, remainingAmount));
+      if (amountToPay > 0) {
+        const monthMap = {
+          January: 1, February: 2, March: 3, April: 4,
+          May: 5, June: 6, July: 7, August: 8,
+          September: 9, October: 10, November: 11, December: 12,
+        };
+        const monthName = group.monthNames[0]?.split(" ")[0] || "";
+        const monthId = monthMap[monthName] || 0;
+        if (monthId >= 1 && monthId <= 12) {
+          fees.push({
+            fee_type_id: group.fee.fee_id,
+            month: monthId,
+            amount: amountToPay,
+          });
+          remainingAmount = round2(remainingAmount - amountToPay);
         }
       }
     });
+
     if (fees.length === 0) {
       alert("No valid fees to submit. Please check the selected fees.");
       return;
@@ -827,27 +1033,16 @@ export const AdmissionFees = () => {
       term_from: termFrom,
       term_to: termTo,
     };
-    if (paymentMode !== "online" && paymentDateParam) {
-      const formattedDate = formatDateWithCurrentTime(paymentDateParam);
-      if (formattedDate) {
-        payload.payment_date = formattedDate;
-        console.log("Formatted payment date:", formattedDate);
-      } else {
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        const hours = String(now.getHours()).padStart(2, '0');
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        const seconds = String(now.getSeconds()).padStart(2, '0');
-        payload.payment_date = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
-        console.log("Fallback payment date:", payload.payment_date);
-      }
+    if (paymentMode !== "online") {
+      // Falls back to today if the date is somehow missing/invalid
+      const formattedDate =
+        formatDateWithCurrentTime(paymentDateParam) ||
+        formatDateWithCurrentTime(getTodayString());
+      payload.payment_date = formattedDate;
     }
     if (advanceAdjustment) {
       payload.advance_adjustment = advanceAdjustment;
     }
-    console.log("Submitting payload:", payload);
     try {
       const submitResInitial = await axiosInstance.post(
         `${BASE_URL}/d/studentfees/submit_fee/`,
@@ -876,9 +1071,10 @@ export const AdmissionFees = () => {
       console.error("Error response:", err.response?.data);
       setPaymentStatus("Payment failed. Please try again.");
       if (err.response?.data) {
-        const errorMsg = typeof err.response.data === 'object'
-          ? JSON.stringify(err.response.data)
-          : err.response.data;
+        const errorMsg =
+          typeof err.response.data === "object"
+            ? JSON.stringify(err.response.data)
+            : err.response.data;
         alert(`Payment failed: ${errorMsg}`);
       }
     }
@@ -886,24 +1082,24 @@ export const AdmissionFees = () => {
 
   const handleAdvanceAdjustment = (adjustmentType) => {
     if (!advancePaymentData) return;
-    const { 
-      paymentMode, 
-      chequeNumber, 
-      schoolYearId, 
-      paidAmount, 
-      annualSelected, 
-      monthlySelected, 
+    const {
+      paymentMode,
+      chequeNumber,
+      schoolYearId,
+      paidAmount,
+      annualSelected,
+      monthlySelected,
       data,
-      paymentDate: advPaymentDate
+      paymentDate: advPaymentDate,
     } = advancePaymentData;
     setShowAdvancePaymentDialog(false);
     processPayment(
-      paymentMode, 
-      chequeNumber, 
-      schoolYearId, 
-      paidAmount, 
-      annualSelected, 
-      monthlySelected, 
+      paymentMode,
+      chequeNumber,
+      schoolYearId,
+      paidAmount,
+      annualSelected,
+      monthlySelected,
       data,
       adjustmentType,
       advPaymentDate
@@ -938,91 +1134,136 @@ export const AdmissionFees = () => {
     };
   }, []);
 
+  /* ---------------------------- derived values ---------------------------- */
+
   const isPaymentModeSelected = !!selectedPaymentMode;
   const totalAmount = calculateTotalAmount();
-  const isPaymentDateRequired = selectedPaymentMode && selectedPaymentMode !== "online" && !paymentDate;
+  const isPaymentDateRequired =
+    selectedPaymentMode && selectedPaymentMode !== "online" && !paymentDate;
+  const hasSelectedFees =
+    selectedFeeIds.length > 0 ||
+    Object.values(selectedGroups).some(
+      (g) => g && g.checked && (parseFloat(g.collectAmount) || 0) > 0
+    );
   const isSubmitDisabled =
     isSubmitting ||
-    (selectedFeeIds.length === 0 &&
-      !Object.values(selectedGroups).some((g) => g && g.checked && g.collectAmount > 0)) ||
+    isRedirecting ||
+    !hasSelectedFees ||
     !isPaymentModeSelected ||
     !watchedPaidAmount ||
-    parseFloat(watchedPaidAmount) <= 0 ||
+    !(parseFloat(watchedPaidAmount) > 0) ||
     isPaymentDateRequired;
 
-  const stuId = window.localStorage.getItem("student_id");
   const stuYearlvlName = localStorage.getItem("stu_year_level_name");
   const stuYearlvlId = localStorage.getItem("stu_year_level_id");
+  const canPickAnyClass = ["director", "office staff", "guardian"].includes(UserRole);
 
-  if (isLoading && !apiError) {
+  const todayStr = getTodayString();
+  const paidNumber = parseFloat(watchedPaidAmount) || 0;
+
+  // Rows for the fee lists
+  const annualRows = annualFees.map((fee) => {
+    const due = round2(parseFloat(fee.due_amount) || 0);
+    const selected = selectedFeeIds.includes(fee.fee_id);
+    return {
+      id: fee.fee_id,
+      label: null,
+      feeType: fee.fee_type,
+      original: parseFloat(fee.original_amount) || 0,
+      paid: parseFloat(fee.paid_amount) || 0,
+      due,
+      status: fee.status,
+      isPaid: due <= 0,
+      selected,
+      onToggle: () => handleAnnualFeeSelect(fee.fee_id),
+      collectAmount: annualCollectAmounts[fee.fee_id] ?? "",
+      onCollectChange: (v) => handleAnnualCollectChange(fee.fee_id, v),
+      inputDisabled: due <= 0 || !selected,
+    };
+  });
+
+  const monthlyRows = monthlyGroups.map((group) => {
+    const due = round2(parseFloat(group.fee.due_amount) || 0);
+    const sel = selectedGroups[group.id] || { checked: true, collectAmount: due };
+    return {
+      id: group.id,
+      label: group.label,
+      feeType: group.fee.fee_type,
+      original: parseFloat(group.fee.original_amount) || 0,
+      paid: parseFloat(group.fee.paid_amount) || 0,
+      due,
+      status: group.fee.status,
+      isPaid: due <= 0,
+      selected: true,
+      onToggle: null,
+      collectAmount: sel.collectAmount ?? "",
+      onCollectChange: (v) => handleGroupCollectChange(group.id, v),
+      inputDisabled: due <= 0,
+    };
+  });
+
+  /* --------------------------- initial page loader ------------------------ */
+
+  if (isLoading && classes.length === 0 && !apiError) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen">
-        <div className="flex space-x-2">
-          <div className="w-3 h-3 bgTheme rounded-full animate-bounce"></div>
-          <div className="w-3 h-3 bgTheme rounded-full animate-bounce [animation-delay:-0.2s]"></div>
-          <div className="w-3 h-3 bgTheme rounded-full animate-bounce [animation-delay:-0.4s]"></div>
-        </div>
-        <p className="mt-2 text-gray-500 text-sm">Loading data...</p>
+      <div className="flex min-h-screen items-center justify-center">
+        <Loader />
       </div>
     );
   }
 
-  if (isLoadingFees && !apiError) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen">
-        <div className="flex space-x-2">
-          <div className="w-3 h-3 bgTheme rounded-full animate-bounce"></div>
-          <div className="w-3 h-3 bgTheme rounded-full animate-bounce [animation-delay:-0.2s]"></div>
-          <div className="w-3 h-3 bgTheme rounded-full animate-bounce [animation-delay:-0.4s]"></div>
-        </div>
-        <p className="mt-2 text-gray-500 text-sm">Loading data...</p>
-      </div>
-    );
-  }
-
-  if (apiError) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen text-center p-6">
-        <i className="fa-solid fa-triangle-exclamation text-5xl text-red-400 mb-4"></i>
-        <p className="text-lg text-red-400 font-medium">
-          Failed to load data, Try Again
-        </p>
-      </div>
-    );
-  }
+  /* --------------------------------- UI ----------------------------------- */
 
   return (
-    <div className="mb-24 md:mb-10">
-      <div className="min-h-screen p-5 bg-gray-50 dark:bg-gray-900">
-        <form
-          className="w-full max-w-7xl mx-auto p-6 bg-base-100 rounded-box my-5 shadow-sm focus:outline-none"
-          onSubmit={handleSubmit(onSubmit)}
-        >
-          <h1 className="text-3xl font-bold text-center mb-8">
-            Fee Payment
-            <i className="fa-solid fa-money-bill-wave ml-2"></i>
-          </h1>
+    <div className="min-h-screen bg-base-200/60 px-3 pb-32 pt-4 sm:px-6 sm:pt-6 md:pb-28 lg:px-8">
+      <form
+        className="mx-auto w-full max-w-6xl space-y-5 sm:space-y-6"
+        onSubmit={handleSubmit(onSubmit)}
+        noValidate
+      >
+        {/* Page header */}
+        <div className="flex flex-col items-center gap-1 text-center sm:py-2">
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bgTheme text-xl text-white shadow-md">
+            <i className="fa-solid fa-money-bill-wave"></i>
+          </span>
+          <h1 className="mt-2 text-2xl font-bold sm:text-3xl">Fee Payment</h1>
+          <p className="max-w-xl text-sm text-base-content/60">
+            Select a student, choose the fees to collect and record the payment.
+          </p>
+        </div>
 
-          {isClass11Or12() && studentStream && selectedStudent && (
-            <div className="alert alert-info mb-4">
-              <i className="fa-solid fa-info-circle"></i>
-              <span>Stream: <strong>{studentStream}</strong> (Fee structure loaded for this stream)</span>
+        {/* Error banner */}
+        {apiError && (
+          <div
+            role="alert"
+            className="flex flex-col gap-3 rounded-xl border border-error/30 bg-error/10 p-4 text-error sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div className="flex items-center gap-3">
+              <i className="fa-solid fa-triangle-exclamation text-lg"></i>
+              <p className="text-sm font-medium">{apiError}. Please try again.</p>
             </div>
-          )}
+            <div className="flex gap-2">
+              <button type="button" className="btn btn-sm btn-error btn-outline" onClick={handleRetry}>
+                Retry
+              </button>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={() => setApiError("")}>
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
 
-          {/* Stream dropdown moved into the Section card below for better layout */}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-1">
-                  <i className="fa-solid fa-school text-sm"></i>
-                  School Year <span className="text-error">*</span>
-                </span>
-              </label>
+        {/* 1. Student selection */}
+        <SectionCard
+          icon="fa-user-graduate"
+          title="Student Selection"
+          subtitle="Choose the school year, class and student"
+        >
+          <div className="grid grid-cols-1 gap-4 sm:gap-5 md:grid-cols-3">
+            <Field label="School Year" icon="fa-calendar-days" required>
               <select
-                className="select select-bordered w-full focus:outline-none"
-                onChange={(e) => setselectedSchYear(e.target.value)}
+                className="select select-bordered w-full text-base focus:outline-none"
+                onChange={handleSchoolYearChange}
                 value={selectedSchYear || ""}
               >
                 <option value="">Select Year</option>
@@ -1032,249 +1273,172 @@ export const AdmissionFees = () => {
                   </option>
                 ))}
               </select>
-            </div>
+            </Field>
 
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-1">
-                  <i className="fa-solid fa-school text-sm"></i>
-                  Class <span className="text-error">*</span>
-                </span>
-              </label>
+            <Field label="Class" icon="fa-school" required>
               <select
-                className="select select-bordered w-full focus:outline-none"
+                className="select select-bordered w-full text-base focus:outline-none"
                 onChange={handleClassChange}
                 value={selectedClassId || ""}
               >
                 <option value="">Select Class</option>
-                {UserRole === "director"
-                  ? classes?.map((classItem) => (
+                {canPickAnyClass &&
+                  classes?.map((classItem) => (
                     <option key={classItem.id} value={classItem.id}>
                       {classItem.level_name}
                     </option>
-                  ))
-                  : UserRole === "office staff"
-                    ? classes?.map((classItem) => (
-                      <option key={classItem.id} value={classItem.id}>
-                        {classItem.level_name}
-                      </option>
-                    ))
-                    : UserRole === "guardian"
-                      ? classes?.map((classItem) => (
-                        <option key={classItem.id} value={classItem.id}>
-                          {classItem.level_name}
-                        </option>
-                      ))
-                      : null}
+                  ))}
                 {UserRole === "student" && (
                   <option key={stuYearlvlId} value={stuYearlvlId}>
                     {stuYearlvlName}
                   </option>
                 )}
               </select>
-            </div>
+            </Field>
 
-            <div className="form-control relative" ref={dropdownRef}>
-              <label className="label">
-                <span className="label-text flex items-center gap-1 text-gray-700 dark:text-gray-300">
-                  <i className="fa-solid fa-user-graduate text-sm"></i>
-                  Student <span className="text-error">*</span>
-                </span>
-              </label>
-              <div
-                className={`input input-bordered w-full flex items-center justify-between cursor-pointer ${!selectedClassId || !selectedSchYear ? "cursor-not-allowed opacity-70" : ""
+            <Field
+              label="Student"
+              icon="fa-user"
+              required
+              error={errors.student_id?.message}
+              hint={
+                !selectedClassId || !selectedSchYear ? "Select a school year and class first" : null
+              }
+            >
+              <div className="relative" ref={dropdownRef}>
+                <div
+                  role="combobox"
+                  aria-expanded={showStudentDropdown}
+                  aria-disabled={!selectedClassId || !selectedSchYear}
+                  tabIndex={0}
+                  className={`input input-bordered flex w-full items-center justify-between gap-2 text-base ${
+                    !selectedClassId || !selectedSchYear
+                      ? "cursor-not-allowed opacity-60"
+                      : "cursor-pointer"
                   }`}
-                disabled={!selectedClassId || !selectedSchYear}
-                onClick={() => {
-                  if (selectedClassId && selectedSchYear)
-                    setShowStudentDropdown(!showStudentDropdown);
-                }}
-              >
-                {selectedStudentName || "Select Student"}
-                <div>
-                  <span className="arrow">&#9662;</span>
-                </div>
-              </div>
-              <input
-                type="hidden"
-                {...register("student_id", {
-                  required: "Student selection is required",
-                })}
-                value={watch("student_id") || ""}
-                readOnly
-              />
-              {showStudentDropdown && selectedClassId && selectedSchYear && (
-                <div className="absolute z-10 bg-white text-gray-700 dark:bg-[#191b1b] dark:text-amber-50 rounded w-full mt-1 shadow-lg">
-                  <div className="p-2 sticky top-0 dark:bg-[#1c1f1f] shadow-sm bg-base-100">
-                    <input
-                      type="text"
-                      placeholder="Search Student by Name or Scholar No..."
-                      className="input input-bordered w-full focus:outline-none"
-                      value={searchStudentInput}
-                      onChange={(e) => setSearchStudentInput(e.target.value)}
-                      autoComplete="off"
-                    />
-                  </div>
-                  <div className="max-h-40 overflow-y-auto">
-                    {isLoading ? (
-                      <p className="p-2">Loading students...</p>
-                    ) : filteredStudents?.length > 0 ? (
-                      filteredStudents.map((stu) => {
-                        const studentYearIdForOption = stu.id;
-                        const studentName = stu.student_name || stu.name || "Unknown";
-                        const scholarNo = stu.scholar_number || "";
-                        const sectionDisplay = stu.section ? ` (${stu.section})` : "";
-                        return (
-                          <p
-                            key={studentYearIdForOption}
-                            className="p-2 hover:bg-base-200 cursor-pointer"
-                            onClick={() => {
-                              const displayName = `${studentName}${scholarNo ? ` - ${scholarNo}` : ''}${sectionDisplay}`;
-                              setSelectedStudentName(displayName);
-                              setSearchStudentInput("");
-                              setShowStudentDropdown(false);
-                              // set the form value to the student-year id (unique) and let the
-                              // effect that watches the form value update selectedStudent and studentYearId.
-                              setValue("student_id", studentYearIdForOption, {
-                                shouldValidate: true,
-                              });
-                              clearErrors("student_id");
-                              // reset dependent UI state; don't set selectedStudent/studentYearId here
-                              // to avoid duplicate updates and duplicate fee-preview API calls
-                              setSelectedFeeIds([]);
-                              setSelectedGroups({});
-                              setAnnualCollectAmounts({});
-                              setManualPaidAmount("");
-                              setPaymentDate("");
-                              if (stu.section) {
-                                setSection(stu.section);
-                              }
-                            }}
-                          >
-                            {studentName}{scholarNo ? ` - ${scholarNo}` : ''}{sectionDisplay}
-                          </p>
-                        );
-                      })
-                    ) : (
-                      <p className="p-2">No students found for this class and year.</p>
-                    )}
-                  </div>
-                </div>
-              )}
-              {errors.student_id && (
-                <p className="text-error text-sm mt-1">
-                  {errors.student_id.message}
-                </p>
-              )}
-            </div>
-
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-credit-card text-sm"></i>
-                  Payment Mode <span className="text-error">*</span>
-                </span>
-              </label>
-              <select
-                className={`select w-full focus:outline-none ${errors.payment_mode ? "select-error" : "select-bordered"
-                  }`}
-                {...register("payment_mode", {
-                  required: "Payment mode is required",
-                })}
-                disabled={!selectedStudentId}
-                onChange={(e) => {
-                  if (e.target.value === "online") {
-                    setPaymentDate("");
-                  }
-                }}
-              >
-                <option value="">Select Payment Mode</option>
-                {paymentModes.map((mode) => (
-                  <option key={mode} value={mode}>
-                    {mode}
-                  </option>
-                ))}
-              </select>
-              {errors.payment_mode && (
-                <label className="label">
-                  <span className="label-text-alt text-error">
-                    {errors.payment_mode.message}
+                  onClick={() => {
+                    if (selectedClassId && selectedSchYear) setShowStudentDropdown(!showStudentDropdown);
+                  }}
+                  onKeyDown={(e) => {
+                    if ((e.key === "Enter" || e.key === " ") && selectedClassId && selectedSchYear) {
+                      e.preventDefault();
+                      setShowStudentDropdown(!showStudentDropdown);
+                    }
+                  }}
+                >
+                  <span className={`truncate ${selectedStudentName ? "" : "text-base-content/50"}`}>
+                    {selectedStudentName || "Select Student"}
                   </span>
-                </label>
-              )}
-            </div>
-          </div>
+                  <i
+                    className={`fa-solid fa-chevron-down text-xs text-base-content/50 transition-transform ${
+                      showStudentDropdown ? "rotate-180" : ""
+                    }`}
+                  ></i>
+                </div>
 
-          {/* ============================================================ */}
-          {/* PAYMENT DATE FIELD - FEES SELECTION SE INDEPENDENT */}
-          {/* Jaise hi non-online payment mode select ho, yeh turant dikhega */}
-          {/* ============================================================ */}
-          {selectedPaymentMode && selectedPaymentMode !== "online" && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
-              <div className="form-control">
-                <label className="label">
-                  <span className="label-text flex items-center gap-2">
-                    <i className="fa-solid fa-calendar-day text-sm"></i>
-                    Payment Date <span className="text-error">*</span>
-                  </span>
-                </label>
                 <input
-                  type="date"
-                  className="input input-bordered w-full focus:outline-none"
-                  value={paymentDate}
-                  onChange={(e) => setPaymentDate(e.target.value)}
-                  max={new Date().toISOString().split('T')[0]}
+                  type="hidden"
+                  {...register("student_id", {
+                    required: "Student selection is required",
+                  })}
+                  value={watch("student_id") || ""}
+                  readOnly
                 />
-                {!paymentDate && (
-                  <label className="label">
-                    <span className="label-text-alt text-warning">
-                      Please select a payment date (time will be auto-set)
-                    </span>
-                  </label>
+
+                {showStudentDropdown && selectedClassId && selectedSchYear && (
+                  <div className="absolute left-0 right-0 z-20 mt-1 overflow-hidden rounded-xl border border-base-300 bg-base-100 shadow-xl">
+                    <div className="border-b border-base-300 bg-base-100 p-2">
+                      <input
+                        type="text"
+                        placeholder="Search by name or scholar no..."
+                        className="input input-bordered input-sm w-full text-base focus:outline-none sm:text-sm"
+                        value={searchStudentInput}
+                        onChange={(e) => setSearchStudentInput(e.target.value)}
+                        autoComplete="off"
+                        autoFocus
+                      />
+                    </div>
+                    <div className="max-h-56 overflow-y-auto">
+                      {isLoading ? (
+                        <p className="p-3 text-sm text-base-content/60">Loading students...</p>
+                      ) : filteredStudents?.length > 0 ? (
+                        filteredStudents.map((stu) => {
+                          const studentYearIdForOption = stu.id;
+                          const studentName = stu.student_name || stu.name || "Unknown";
+                          const scholarNo = stu.scholar_number || "";
+                          const sectionDisplay = stu.section ? ` (${stu.section})` : "";
+                          return (
+                            <button
+                              type="button"
+                              key={studentYearIdForOption}
+                              className="block w-full break-words px-3 py-2.5 text-left text-sm hover:bg-base-200"
+                              onClick={() => {
+                                const displayName = `${studentName}${
+                                  scholarNo ? ` - ${scholarNo}` : ""
+                                }${sectionDisplay}`;
+                                setSelectedStudentName(displayName);
+                                setSearchStudentInput("");
+                                setShowStudentDropdown(false);
+                                // The effect watching the form value updates selectedStudent
+                                // and studentYearId (avoids duplicate fee-preview calls).
+                                setValue("student_id", studentYearIdForOption, {
+                                  shouldValidate: true,
+                                });
+                                clearErrors("student_id");
+                                resetFeeSelections();
+                                if (stu.section) {
+                                  setSection(stu.section);
+                                }
+                              }}
+                            >
+                              {studentName}
+                              {scholarNo ? ` - ${scholarNo}` : ""}
+                              {sectionDisplay}
+                            </button>
+                          );
+                        })
+                      ) : (
+                        <p className="p-3 text-sm text-base-content/60">
+                          No students found for this class and year.
+                        </p>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
-            </div>
-          )}
+            </Field>
+          </div>
+        </SectionCard>
 
-          {selectedStudent && selectedSchYear && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 p-5 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl mt-6 border-2 border-blue-200 shadow-lg">
-              <div className="bg-white rounded-lg p-4 shadow-md border border-gray-200">
-                <label className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                  <i className="fa-solid fa-user text-blue-600"></i>
-                  Parent's Name
-                </label>
-                <input
-                  type="text"
-                  className="input input-bordered w-full focus:outline-none bg-gray-100 cursor-not-allowed mt-1 font-medium text-gray-800"
-                  value={parentName}
-                  disabled
-                  readOnly
-                  placeholder="Parent name will auto-populate"
-                />
+        {/* 2. Student details */}
+        {selectedStudent && selectedSchYear && (
+          <SectionCard
+            icon="fa-id-card"
+            title="Student Details"
+            subtitle={selectedStudent.student_name || selectedStudent.name}
+          >
+            {isClass11Or12() && studentStream && (
+              <div className="mb-4 flex items-start gap-3 rounded-xl border border-info/30 bg-info/10 p-3 text-sm text-info">
+                <i className="fa-solid fa-circle-info mt-0.5"></i>
+                <span>
+                  Stream: <strong>{studentStream}</strong> (fee structure loaded for this stream)
+                </span>
               </div>
-              <div className="bg-white rounded-lg p-4 shadow-md border border-gray-200">
-                <label className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                  <i className="fa-solid fa-graduation-cap text-green-600"></i>
-                  Grade
-                </label>
-                <input
-                  type="text"
-                  className="input input-bordered w-full focus:outline-none bg-gray-100 cursor-not-allowed mt-1 font-medium text-gray-800"
-                  value={grade}
-                  disabled readOnly
-                  placeholder="Grade will auto-populate"
-                />
-              </div>
-              <div className="bg-white rounded-lg p-4 shadow-md border border-gray-200">
-                <label className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                  <i className="fa-solid fa-layer-group text-purple-600"></i>
-                  Section
-                </label>
-                {/* For Class 11/12 students show an editable stream selector so user can change selection */}
+            )}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
+              <InfoTile icon="fa-user" iconColor="text-blue-500" label="Parent's Name">
+                {parentName || <span className="text-base-content/40">—</span>}
+              </InfoTile>
+              <InfoTile icon="fa-graduation-cap" iconColor="text-green-500" label="Grade">
+                {grade || <span className="text-base-content/40">—</span>}
+              </InfoTile>
+              <InfoTile icon="fa-layer-group" iconColor="text-purple-500" label="Section">
+                {section || <span className="text-base-content/40">—</span>}
+                {/* Class 11/12 students without a detectable stream can pick one manually */}
                 {isClass11Or12() && selectedStudent && !getStreamFromSection(section) && (
-                  <div className="mt-1">
+                  <div className="mt-2">
                     <select
-                      className="select select-bordered w-full focus:outline-none"
+                      className="select select-bordered select-sm w-full text-base focus:outline-none sm:text-sm"
                       value={studentStream || ""}
                       onChange={(e) => setStudentStream(e.target.value)}
                     >
@@ -1284,72 +1448,77 @@ export const AdmissionFees = () => {
                       <option value="COMM">COMM (Commerce)</option>
                       <option value="ARTS">ARTS (Arts)</option>
                     </select>
-                    <p className="text-xs text-gray-500 mt-1">Pick or change stream to load stream-specific fees</p>
+                    <p className="mt-1 text-xs font-normal text-base-content/60">
+                      Pick or change stream to load stream-specific fees
+                    </p>
                   </div>
                 )}
-                {/* Always show section (read-only) */}
-                <input
-                  type="text"
-                  className="input input-bordered w-full focus:outline-none bg-gray-100 cursor-not-allowed mt-3 font-medium text-gray-800"
-                  value={section}
-                  disabled
-                  readOnly
-                  placeholder="Section will auto-populate"
-                />
-              </div>
+              </InfoTile>
             </div>
-          )}
+          </SectionCard>
+        )}
 
-          {selectedStudent && sessionMonths.length > 0 && (
-            <div className="mt-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
-              <div className="flex items-center justify-between mb-3">
-                <label className="text-sm font-semibold text-gray-700">
-                  <i className="fa-solid fa-calendar mr-2"></i>
-                  Select Months for Tuition Fees
-                </label>
-                <button
-                  type="button"
-                  onClick={handleSelectAllMonths}
-                  className="btn btn-sm btn-outline btn-primary"
-                >
-                  {selectedMonths.length === sessionMonths.length ? "Deselect All" : "Select All"}
-                </button>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {sessionMonths.map((month) => (
+        {/* 3. Months */}
+        {selectedStudent && sessionMonths.length > 0 && (
+          <SectionCard
+            icon="fa-calendar"
+            title="Tuition Months"
+            subtitle="Select the months you want to collect tuition fees for"
+            action={
+              <button
+                type="button"
+                onClick={handleSelectAllMonths}
+                className="btn btn-sm btn-outline btn-primary"
+              >
+                {selectedMonths.length === sessionMonths.length ? "Deselect All" : "Select All"}
+              </button>
+            }
+          >
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+              {sessionMonths.map((month) => {
+                const active = selectedMonths.includes(month);
+                return (
                   <button
                     key={month}
                     type="button"
+                    aria-pressed={active}
                     onClick={() => handleMonthSelection(month)}
-                    className={`px-3 py-1.5 rounded-full text-sm font-medium transition-all duration-200 ${selectedMonths.includes(month)
-                      ? 'bg-blue-600 text-white shadow-md'
-                      : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-100'
-                      }`}
+                    className={`rounded-lg border px-2 py-2 text-sm font-medium transition-all duration-200 ${
+                      active
+                        ? "border-primary bg-primary text-primary-content shadow-sm"
+                        : "border-base-300 bg-base-100 hover:border-primary/50 hover:bg-base-200"
+                    }`}
                   >
+                    {active && <i className="fa-solid fa-check mr-1.5 text-xs"></i>}
                     {month}
                   </button>
-                ))}
-              </div>
-              {selectedMonths.length > 0 && (
-                <div className="mt-3 text-sm text-gray-600">
-                  <i className="fa-solid fa-check-circle text-green-500 mr-1"></i>
-                  {selectedMonths.length} month(s) selected
-                </div>
-              )}
+                );
+              })}
             </div>
-          )}
+            {selectedMonths.length > 0 && (
+              <p className="mt-3 text-sm text-base-content/70">
+                <i className="fa-solid fa-circle-check mr-1.5 text-success"></i>
+                {selectedMonths.length} month(s) selected
+              </p>
+            )}
+          </SectionCard>
+        )}
 
-          {(availableFees.length > 0 || annualFees.length > 0) &&
-            selectedStudent && (
-              <div className="mt-8">
-                <h2 className="text-2xl font-bold mb-6 text-center text-gray-900 dark:text-gray-100">
-                  Fee Details for {selectedStudent.student_name || selectedStudent.name}
-                </h2>
-
-                {annualFees.length > 0 && (
-                  <div className="mb-8">
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-xl font-semibold">Annual Fees</h3>
+        {/* 4. Fee details */}
+        {selectedStudent && (isLoadingFees || availableFees.length > 0 || annualFees.length > 0) && (
+          <SectionCard
+            icon="fa-receipt"
+            title="Fee Details"
+            subtitle={`For ${selectedStudent.student_name || selectedStudent.name}`}
+          >
+            {isLoadingFees ? (
+              <Loader label="Loading fee details..." />
+            ) : (
+              <div className="space-y-8">
+                {annualRows.length > 0 && (
+                  <div>
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-base font-semibold sm:text-lg">Annual Fees</h3>
                       <button
                         type="button"
                         onClick={handleSelectAllAnnualFees}
@@ -1358,299 +1527,186 @@ export const AdmissionFees = () => {
                         {selectedFeeIds.length === annualFees.length ? "Deselect All" : "Select All"}
                       </button>
                     </div>
-                    <div className="overflow-x-auto">
-                      <table className="table w-full border">
-                        <thead className="bg-base-200">
-                          <tr>
-                            <th className="w-12">Select</th>
-                            <th>Fee Type</th>
-                            <th>Original</th>
-                            <th>Paid</th>
-                            <th>Due</th>
-                            <th>Status</th>
-                            <th>Amount to Collect</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {annualFees.map((fee) => {
-                            const original = parseFloat(fee.original_amount) || 0;
-                            const paid = parseFloat(fee.paid_amount) || 0;
-                            const due = parseFloat(fee.due_amount) || 0;
-                            const isSelected = selectedFeeIds.includes(fee.fee_id);
-                            const isPaid = due <= 0;
-                            const collectAmount = annualCollectAmounts[fee.fee_id] || 0;
-
-                            return (
-                              <tr key={fee.fee_id} className="hover">
-                                <td>
-                                  <input
-                                    type="checkbox"
-                                    className="checkbox checkbox-primary"
-                                    checked={isSelected}
-                                    onChange={() => handleAnnualFeeSelect(fee.fee_id)}
-                                    disabled={isPaid}
-                                  />
-                                </td>
-                                <td className="font-medium">{fee.fee_type}</td>
-                                <td>₹{original.toFixed(2)}</td>
-                                <td>₹{paid.toFixed(2)}</td>
-                                <td className={due > 0 ? "text-warning font-semibold" : ""}>
-                                  ₹{due.toFixed(2)}
-                                </td>
-                                <td>
-                                  {fee.status === "Paid" ? (
-                                    <span className="badge badge-success text-gray-900 dark:text-white">
-                                      Paid
-                                    </span>
-                                  ) : fee.status === "Partial" ? (
-                                    <span className="badge badge-warning text-gray-900 dark:text-white">
-                                      Partial
-                                    </span>
-                                  ) : (
-                                    <span className="badge badge-error text-gray-900 dark:text-white">
-                                      Pending
-                                    </span>
-                                  )}
-                                </td>
-                                <td>
-                                  <div className="flex items-center gap-1">
-                                    <input
-                                      type="number"
-                                      className="input input-bordered input-sm w-24 focus:outline-none"
-                                      min="0"
-                                      max={due}
-                                      step="1"
-                                      value={collectAmount}
-                                      onChange={(e) =>
-                                        handleAnnualCollectChange(
-                                          fee.fee_id,
-                                          e.target.value
-                                        )
-                                      }
-                                      disabled={isPaid || !isSelected}
-                                    />
-                                    {due > 0 && (
-                                      <span className="text-xs text-gray-500">
-                                        (max: ₹{due.toFixed(0)})
-                                      </span>
-                                    )}
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
+                    <FeeList rows={annualRows} showSelect />
                   </div>
                 )}
 
                 <div>
-                  <h3 className="text-xl font-semibold mb-4">
+                  <h3 className="mb-3 text-base font-semibold sm:text-lg">
                     Monthly Tuition Fees
                     {selectedMonths.length > 0 && (
-                      <span className="text-sm font-normal text-gray-500 ml-2">
-                        (Showing {selectedMonths.length} selected months)
+                      <span className="ml-2 text-sm font-normal text-base-content/60">
+                        ({selectedMonths.length} selected)
                       </span>
                     )}
                   </h3>
-                  {monthlyGroups.length === 0 ? (
-                    <div className="text-center py-4 text-gray-500">
+                  {monthlyRows.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-base-300 py-6 text-center text-sm text-base-content/60">
                       {selectedMonths.length === 0
                         ? "Please select months from above to view tuition fees."
-                        : "No Tuition fees found for the selected months."}
+                        : "No tuition fees found for the selected months."}
                     </div>
                   ) : (
-                    <div className="overflow-x-auto">
-                      <table className="table w-full border">
-                        <thead className="bg-base-200">
-                          <tr>
-                            <th>Month</th>
-                            <th>Fee Type</th>
-                            <th>Original</th>
-                            <th>Paid</th>
-                            <th>Due</th>
-                            <th>Status</th>
-                            <th>Amount to Collect</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {monthlyGroups.map((group) => {
-                            const due = parseFloat(group.fee.due_amount) || 0;
-                            const original = parseFloat(group.fee.original_amount) || 0;
-                            const paid = parseFloat(group.fee.paid_amount) || 0;
-                            const status = group.fee.status;
-                            const sel = selectedGroups[group.id] || {
-                              checked: true,
-                              collectAmount: due,
-                            };
-                            const isPaid = due <= 0;
-
-                            return (
-                              <tr key={group.id} className="hover">
-                                <td className="font-semibold">{group.label}</td>
-                                <td>{group.fee.fee_type}</td>
-                                <td>₹{original.toFixed(2)}</td>
-                                <td>₹{paid.toFixed(2)}</td>
-                                <td className={due > 0 ? "text-warning font-semibold" : ""}>
-                                  ₹{due.toFixed(2)}
-                                </td>
-                                <td>
-                                  {status === "Paid" ? (
-                                    <span className="badge badge-success text-gray-900 dark:text-white">
-                                      Paid
-                                    </span>
-                                  ) : status === "Partial" ? (
-                                    <span className="badge badge-warning text-gray-900 dark:text-white">
-                                      Partial
-                                    </span>
-                                  ) : (
-                                    <span className="badge badge-error text-gray-900 dark:text-white">
-                                      Pending
-                                    </span>
-                                  )}
-                                </td>
-                                <td>
-                                  <div className="flex items-center gap-1">
-                                    <input
-                                      type="number"
-                                      className="input input-bordered input-sm w-24 focus:outline-none"
-                                      min="0"
-                                      max={due}
-                                      step="1"
-                                      value={sel.collectAmount}
-                                      onChange={(e) =>
-                                        handleGroupCollectChange(
-                                          group.id,
-                                          e.target.value
-                                        )
-                                      }
-                                      disabled={isPaid}
-                                    />
-                                    {due > 0 && (
-                                      <span className="text-xs text-gray-500">
-                                        (max: ₹{due.toFixed(0)})
-                                      </span>
-                                    )}
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
+                    <FeeList rows={monthlyRows} firstColumnLabel="Month" />
                   )}
                 </div>
 
-                {(selectedFeeIds.length > 0 ||
-                  Object.values(selectedGroups).some((g) => g && g.checked && g.collectAmount > 0)) && (
-                    <div className="bg-base-300 p-4 rounded-lg mt-6">
-                      <h3 className="text-lg font-semibold mb-2">
+                {hasSelectedFees && (
+                  <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/30 bg-primary/5 p-4">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-base-content/60">
                         Payment Summary
-                      </h3>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="font-bold text-lg mt-2 border-t pt-2">
-                          Total Payable Now:
-                        </div>
-                        <div className="text-right font-bold text-lg mt-2 border-t pt-2 text-primary">
-                          ₹{totalAmount.toFixed(2)}
-                        </div>
-                      </div>
+                      </p>
+                      <p className="text-sm font-medium sm:text-base">Total Payable Now</p>
                     </div>
-                  )}
+                    <p className="text-xl font-bold tabular-nums text-primary sm:text-2xl">
+                      {inr(totalAmount)}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
+          </SectionCard>
+        )}
 
-          {!isLoadingFees &&
-            availableFees.length === 0 &&
-            annualFees.length === 0 &&
-            selectedStudentId && (
-              <div className="text-center mt-8 text-gray-500">
-                No fees found for the selected student and year.
-              </div>
+        {!isLoadingFees &&
+          availableFees.length === 0 &&
+          annualFees.length === 0 &&
+          selectedStudentId && (
+            <div className="rounded-2xl border border-dashed border-base-300 bg-base-100 py-8 text-center text-sm text-base-content/60">
+              No fees found for the selected student and year.
+            </div>
+          )}
+
+        {/* 5. Payment details */}
+        <SectionCard
+          icon="fa-credit-card"
+          title="Payment Details"
+          subtitle="Choose how the payment was made and confirm the amount"
+        >
+          <div className="grid grid-cols-1 gap-4 sm:gap-5 md:grid-cols-2">
+            <Field
+              label="Payment Mode"
+              icon="fa-wallet"
+              required
+              error={errors.payment_mode?.message}
+              hint={!selectedStudentId ? "Select a student first" : null}
+            >
+              {(() => {
+                const paymentModeField = register("payment_mode", {
+                  required: "Payment mode is required",
+                });
+                return (
+                  <select
+                    className={`select w-full text-base focus:outline-none ${
+                      errors.payment_mode ? "select-error" : "select-bordered"
+                    }`}
+                    {...paymentModeField}
+                    disabled={!selectedStudentId}
+                    onChange={(e) => {
+                      // keep react-hook-form in sync, then apply our own logic
+                      paymentModeField.onChange(e);
+                      setPaymentDate(getTodayString());
+                    }}
+                  >
+                    <option value="">Select Payment Mode</option>
+                    {paymentModes.map((mode) => (
+                      <option key={mode} value={mode}>
+                        {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                );
+              })()}
+            </Field>
+
+            {selectedPaymentMode && selectedPaymentMode !== "online" && (
+              <Field
+                label="Payment Date"
+                icon="fa-calendar-day"
+                required
+                hint={
+                  <div className="flex flex-wrap items-center gap-x-2">
+                    <span>Defaults to today · time is set automatically</span>
+                    {paymentDate !== todayStr && (
+                      <button
+                        type="button"
+                        className="font-medium text-primary hover:underline"
+                        onClick={() => setPaymentDate(todayStr)}
+                      >
+                        Reset to today
+                      </button>
+                    )}
+                  </div>
+                }
+              >
+                <input
+                  type="date"
+                  className="input input-bordered w-full text-base focus:outline-none"
+                  value={paymentDate}
+                  onChange={(e) => setPaymentDate(e.target.value)}
+                  max={todayStr}
+                />
+              </Field>
             )}
 
-          <div
-            className={`grid gap-6 mt-6 ${selectedPaymentMode === "cheque"
-              ? "grid-cols-1 md:grid-cols-3"
-              : "grid-cols-1 md:grid-cols-2"
-              }`}
-          >
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-calculator text-sm"></i>
-                  Paid Amount <span className="text-error">*</span>
-                </span>
-              </label>
+            <Field label="Paid Amount" icon="fa-calculator" required error={errors.paid_amount?.message}>
               <input
-                type="number"
-                className={`input w-full focus:outline-none ${errors.paid_amount ? "input-error" : "input-bordered"
-                  }`}
+                type="text"
+                inputMode="decimal"
+                className={`input w-full text-base focus:outline-none ${
+                  errors.paid_amount ? "input-error" : "input-bordered"
+                }`}
                 {...register("paid_amount", {
                   required: "Amount is required",
-                  min: { value: 0.01 },
+                  validate: (v) => parseFloat(v) > 0 || "Amount must be greater than 0",
                 })}
                 value={watchedPaidAmount || ""}
                 onChange={handlePaidAmountChange}
-                step="1"
                 placeholder="Enter amount to pay"
               />
-              {errors.paid_amount && (
-                <label className="label">
-                  <span className="label-text-alt text-error">
-                    {errors.paid_amount.message}
-                  </span>
-                </label>
-              )}
-              <div className="flex justify-between items-center mt-1">
-                <span className="text-xs text-gray-500">
-                  Total Payable: ₹{totalAmount.toFixed(2)}
-                </span>
+              <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs text-base-content/60">Total payable: {inr(totalAmount)}</span>
                 <button
                   type="button"
                   onClick={() => {
                     setManualPaidAmount(totalAmount.toFixed(2));
-                    setValue("paid_amount", totalAmount.toFixed(2));
+                    setValue("paid_amount", totalAmount.toFixed(2), { shouldValidate: true });
                   }}
-                  className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                  className="text-xs font-medium text-primary hover:underline"
                 >
                   <i className="fa-solid fa-fill-drip mr-1"></i>
                   Auto-fill
                 </button>
               </div>
-              {watchedPaidAmount && parseFloat(watchedPaidAmount) > totalAmount && (
-                <div className="mt-1 text-xs text-green-600 font-medium">
+              {paidNumber > totalAmount && (
+                <p className="mt-1 text-xs font-medium text-success">
                   <i className="fa-solid fa-arrow-up mr-1"></i>
-                  Advance Payment: ₹{(parseFloat(watchedPaidAmount) - totalAmount).toFixed(2)} extra
-                </div>
+                  Advance payment: {inr(paidNumber - totalAmount)} extra
+                </p>
               )}
-              {watchedPaidAmount && parseFloat(watchedPaidAmount) < totalAmount && parseFloat(watchedPaidAmount) > 0 && (
-                <div className="mt-1 text-xs text-orange-600 font-medium">
-                  <i className="fa-solid fa-info-circle mr-1"></i>
-                  Partial Payment: ₹{(totalAmount - parseFloat(watchedPaidAmount)).toFixed(2)} will remain due
-                </div>
+              {paidNumber > 0 && paidNumber < totalAmount && (
+                <p className="mt-1 text-xs font-medium text-warning">
+                  <i className="fa-solid fa-circle-info mr-1"></i>
+                  Partial payment: {inr(totalAmount - paidNumber)} will remain due
+                </p>
               )}
-            </div>
+            </Field>
 
             {selectedPaymentMode === "cheque" && (
-              <div className="form-control">
-                <label className="label">
-                  <span className="label-text flex items-center gap-2">
-                    <i className="fa-solid fa-file-invoice text-sm"></i>
-                    Cheque Number <span className="text-error">*</span>
-                  </span>
-                </label>
+              <Field
+                label="Cheque Number"
+                icon="fa-file-invoice"
+                required
+                error={errors.cheque_number?.message}
+              >
                 <input
                   type="text"
-                  className={`input w-full focus:outline-none ${errors.cheque_number ? "input-error" : "input-bordered"
-                    }`}
+                  className={`input w-full text-base focus:outline-none ${
+                    errors.cheque_number ? "input-error" : "input-bordered"
+                  }`}
                   {...register("cheque_number", {
-                    required:
-                      selectedPaymentMode === "cheque"
-                        ? "Cheque number is required"
-                        : false,
+                    required: selectedPaymentMode === "cheque" ? "Cheque number is required" : false,
                     minLength: {
                       value: 3,
                       message: "Cheque number must be at least 3 characters",
@@ -1665,34 +1721,24 @@ export const AdmissionFees = () => {
                     },
                   })}
                   placeholder="Enter cheque number"
-                  disabled={
-                    (selectedFeeIds.length === 0 &&
-                      !Object.values(selectedGroups).some((g) => g && g.checked && g.collectAmount > 0)) ||
-                    !isPaymentModeSelected
-                  }
+                  disabled={!hasSelectedFees || !isPaymentModeSelected}
                 />
-                {errors.cheque_number && (
-                  <label className="label">
-                    <span className="label-text-alt text-error">
-                      {errors.cheque_number.message}
-                    </span>
-                  </label>
-                )}
-              </div>
+              </Field>
             )}
 
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text flex items-center gap-2">
-                  <i className="fa-solid fa-comment text-sm"></i>
-                  Remarks <span className="text-error">*</span>
-                </span>
-              </label>
+            <Field
+              label="Remarks"
+              icon="fa-comment"
+              required
+              error={errors.remarks?.message}
+              className="md:col-span-2"
+            >
               <input
                 type="text"
                 maxLength={25}
-                className={`input w-full focus:outline-none ${errors.remarks ? "input-error" : "input-bordered"
-                  }`}
+                className={`input w-full text-base focus:outline-none ${
+                  errors.remarks ? "input-error" : "input-bordered"
+                }`}
                 {...register("remarks", {
                   required: "Remarks are required",
                   minLength: {
@@ -1705,121 +1751,130 @@ export const AdmissionFees = () => {
                   },
                 })}
                 placeholder="Enter any remarks"
-                disabled={
-                  (selectedFeeIds.length === 0 &&
-                    !Object.values(selectedGroups).some((g) => g && g.checked && g.collectAmount > 0)) ||
-                  !isPaymentModeSelected
-                }
+                disabled={!hasSelectedFees || !isPaymentModeSelected}
               />
-              {errors.remarks && (
-                <label className="label">
-                  <span className="label-text-alt text-sm text-error">
-                    {errors.remarks.message}
-                  </span>
-                </label>
-              )}
-            </div>
+            </Field>
           </div>
 
-          <div className="flex justify-center mt-10">
+          <div className="mt-6 flex flex-col items-stretch gap-3 border-t border-base-300 pt-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-center sm:text-left">
+              <p className="text-xs uppercase tracking-wide text-base-content/60">Amount being paid</p>
+              <p className="text-xl font-bold tabular-nums">{inr(paidNumber)}</p>
+            </div>
             <button
               type="submit"
-              className={`btn bgTheme text-white w-52 ${isSubmitDisabled
-                ? "opacity-50 cursor-not-allowed"
-                : "hover:bg-purple-700"
-                }`}
+              className={`btn bgTheme w-full text-white sm:w-auto sm:min-w-[13rem] ${
+                isSubmitDisabled ? "cursor-not-allowed opacity-50" : "hover:bg-purple-700"
+              }`}
               disabled={isSubmitDisabled}
             >
               {isSubmitting || isRedirecting ? (
                 <i className="fa-solid fa-spinner fa-spin mr-2"></i>
               ) : (
-                <i className="fa-solid fa-money-bill-wave ml-2"></i>
+                <i className="fa-solid fa-money-bill-wave mr-2"></i>
               )}
-              {isSubmitting || isRedirecting
-                ? "Redirecting..."
-                : "Submit Payment"}
+              {isRedirecting ? "Redirecting..." : isSubmitting ? "Processing..." : "Submit Payment"}
             </button>
           </div>
-        </form>
+        </SectionCard>
+      </form>
 
-        {showAdvancePaymentDialog && advancePaymentData && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
-              <h3 className="text-xl font-bold mb-4 text-gray-900 dark:text-white">
-                Advance Payment Detected
-              </h3>
-              <div className="mb-4">
-                <p className="text-gray-700 dark:text-gray-300">
-                  You are trying to pay <strong>₹{advancePaymentData.paidAmount.toFixed(2)}</strong> which exceeds the total payable amount of <strong>₹{advancePaymentData.totalPayable.toFixed(2)}</strong>.
-                </p>
-                <p className="text-gray-700 dark:text-gray-300 mt-2">
-                  The excess amount is <strong className="text-blue-600">₹{advancePaymentData.advanceAmount.toFixed(2)}</strong>.
-                </p>
-                <p className="text-gray-700 dark:text-gray-300 mt-2">
-                  Where would you like to adjust this advance amount?
-                </p>
+      {/* Advance payment dialog */}
+      {showAdvancePaymentDialog && advancePaymentData && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={closeAdvancePaymentDialog}
+        >
+          <div
+            className="max-h-[90vh] w-full overflow-y-auto rounded-t-2xl bg-base-100 p-5 shadow-xl sm:max-w-md sm:rounded-2xl sm:p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <i className="fa-solid fa-circle-plus"></i>
+              </span>
+              <h3 className="text-lg font-bold sm:text-xl">Advance Payment Detected</h3>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-lg bg-base-200 p-2">
+                <p className="text-[11px] uppercase tracking-wide text-base-content/60">Paying</p>
+                <p className="text-sm font-semibold tabular-nums">{inr(advancePaymentData.paidAmount)}</p>
               </div>
-              <div className="flex flex-col gap-3 mt-4">
-                <button
-                  type="button"
-                  onClick={() => handleAdvanceAdjustment('amount_fee')}
-                  className="btn bg-blue-600 text-white hover:bg-blue-700 w-full"
-                >
-                  Adjust in Amount Fee
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleAdvanceAdjustment('activity_fee')}
-                  className="btn bg-purple-600 text-white hover:bg-purple-700 w-full"
-                >
-                  Adjust in Activity Fee
-                </button>
-                <button
-                  type="button"
-                  onClick={closeAdvancePaymentDialog}
-                  className="btn btn-outline w-full"
-                >
-                  Cancel
-                </button>
+              <div className="rounded-lg bg-base-200 p-2">
+                <p className="text-[11px] uppercase tracking-wide text-base-content/60">Payable</p>
+                <p className="text-sm font-semibold tabular-nums">{inr(advancePaymentData.totalPayable)}</p>
+              </div>
+              <div className="rounded-lg bg-primary/10 p-2">
+                <p className="text-[11px] uppercase tracking-wide text-base-content/60">Excess</p>
+                <p className="text-sm font-semibold tabular-nums text-primary">
+                  {inr(advancePaymentData.advanceAmount)}
+                </p>
               </div>
             </div>
+
+            <p className="mt-4 text-sm text-base-content/80">
+              The amount exceeds the total payable. Where would you like to adjust the excess amount?
+            </p>
+
+            <div className="mt-5 flex flex-col gap-3">
+              <button
+                type="button"
+                onClick={() => handleAdvanceAdjustment("amount_fee")}
+                className="btn w-full bg-blue-600 text-white hover:bg-blue-700"
+              >
+                Adjust in Amount Fee
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAdvanceAdjustment("activity_fee")}
+                className="btn w-full bg-purple-600 text-white hover:bg-purple-700"
+              >
+                Adjust in Activity Fee
+              </button>
+              <button type="button" onClick={closeAdvancePaymentDialog} className="btn btn-outline w-full">
+                Cancel
+              </button>
+            </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {showPaymentDialog && paymentStatus && (
-          <PaymentStatusDialog
-            paymentStatus={paymentStatus}
-            onClose={() => {
-              setShowPaymentDialog(false);
-              setPaymentStatus(null);
-              window.location.reload();
-            }}
-          />
-        )}
+      {showPaymentDialog && paymentStatus && (
+        <PaymentStatusDialog
+          paymentStatus={paymentStatus}
+          onClose={() => {
+            setShowPaymentDialog(false);
+            setPaymentStatus(null);
+            window.location.reload();
+          }}
+        />
+      )}
 
-        {showPaymentDialog1 && paymentStatus && (
-          <PaymentStatusDialogOffline
-            paymentStatus={paymentStatus}
-            onClose={() => {
-              setShowPaymentDialog1(false);
-              setPaymentStatus(null);
-              window.location.reload();
-            }}
-          />
-        )}
+      {showPaymentDialog1 && paymentStatus && (
+        <PaymentStatusDialogOffline
+          paymentStatus={paymentStatus}
+          onClose={() => {
+            setShowPaymentDialog1(false);
+            setPaymentStatus(null);
+            window.location.reload();
+          }}
+        />
+      )}
 
-        {showReceiptModal && (
-          <ReceiptModal
-            receiptData={receiptData}
-            onClose={() => {
-              setShowReceiptModal(false);
-              setReceiptData(null);
-              window.location.reload();
-            }}
-            isLoading={isLoadingReceipt}
-          />
-        )}
-      </div>
+      {showReceiptModal && (
+        <ReceiptModal
+          receiptData={receiptData}
+          onClose={() => {
+            setShowReceiptModal(false);
+            setReceiptData(null);
+            window.location.reload();
+          }}
+          isLoading={isLoadingReceipt}
+        />
+      )}
     </div>
   );
 };

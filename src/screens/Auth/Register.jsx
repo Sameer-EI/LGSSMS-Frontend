@@ -28,6 +28,7 @@ export const Register = () => {
   const {
     register,
     handleSubmit,
+    setError: setFieldError,
     formState: { errors },
   } = useForm({
     mode: "onChange",
@@ -68,8 +69,44 @@ export const Register = () => {
       } else {
         setError("Registration failed. Please try again.");
       }
-    } catch {
-      setError("Something went wrong. Please try again later.");
+    } catch (err) {
+      const serverData = err?.response?.data;
+
+      if (serverData && typeof serverData === "object") {
+        let fieldErrorSet = false;
+
+        Object.entries(serverData).forEach(([field, messages]) => {
+          const text = Array.isArray(messages)
+            ? messages.join(" ")
+            : String(messages);
+
+          if (field === "email") {
+            setFieldError("email", { type: "server", message: text });
+            fieldErrorSet = true;
+          } else if (field === "password") {
+            setFieldError("password", { type: "server", message: text });
+            fieldErrorSet = true;
+          } else if (field === "role") {
+            setFieldError("roleId", { type: "server", message: text });
+            fieldErrorSet = true;
+          } else if (field === "first_name") {
+            setFieldError("firstName", { type: "server", message: text });
+            fieldErrorSet = true;
+          } else if (field === "last_name") {
+            setFieldError("lastName", { type: "server", message: text });
+            fieldErrorSet = true;
+          } else if (field === "detail" || field === "non_field_errors") {
+            setError(text);
+            fieldErrorSet = true;
+          }
+        });
+
+        if (!fieldErrorSet) {
+          setError("Something went wrong. Please try again later.");
+        }
+      } else {
+        setError("Something went wrong. Please try again later.");
+      }
     } finally {
       setLoading(false);
     }
@@ -266,8 +303,6 @@ export const Register = () => {
         </div>
       </div>
 
-      {/* Success Modal */}
-      {/* Success Modal */}
       {registrationSuccess && (
         <div className="modal modal-open">
           <div className="modal-box">
@@ -275,7 +310,7 @@ export const Register = () => {
             <p className="py-4">Your account has been created successfully.</p>
             <div className="modal-action">
               <button
-                onClick={() => window.location.reload()}
+                onClick={() => navigate(-2)}
                 className="btn bgTheme text-white"
               >
                 OK
