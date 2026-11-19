@@ -1,1010 +1,784 @@
-import React, { useEffect, useState, useContext, useCallback, useRef } from "react";
-import { fetchSchoolYear, fetchYearLevels } from "../../services/api/Api";
-import { allRouterLink } from "../../router/AllRouterLinks";
+import React, { useEffect, useState, useContext, useCallback, useMemo, useRef } from "react";
 import { Link } from "react-router-dom";
-import { AuthContext } from "../../context/AuthContext";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import { fetchSchoolYear, fetchYearLevels } from "../../services/api/Api";
+import { allRouterLink } from "../../router/AllRouterLinks";
+import { AuthContext } from "../../context/AuthContext";
+
+/* ----------------------------- helpers ----------------------------- */
+
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+// Academic order: Annual first, then April → March
+const MONTH_ORDER = ["Annual", "April", "May", "June", "July", "August", "September",
+  "October", "November", "December", "January", "February", "March"];
+
+const FEE_TYPES = [
+  "Tuition Fee (General)", "Tuition Fee (PCM/PCB)", "Tuition Fee (Comm/Arts)",
+  "Admission Fee", "Exam Fee", "Activity Fee", "Caution Fee", "Maintenance", "Others",
+];
+
+const num = (v) => {
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const inr = (v) =>
+  new Intl.NumberFormat("en-IN", {
+    style: "currency", currency: "INR", minimumFractionDigits: 2,
+  }).format(v || 0);
+
+const monthRank = (m) => {
+  const i = MONTH_ORDER.indexOf(m);
+  return i === -1 ? 99 : i;
+};
+
+/**
+ * Receipt (API) -> flat monthly rows (one per payment line).
+ * ⚠️ If your payment line uses different field names for amounts,
+ * adjust ONLY this function.
+ */
+const normalizeReceipts = (receipts) => {
+  const rows = [];
+  receipts.forEach((rec, rIdx) => {
+    const st = rec.student || {};
+    const base = {
+      scholarNo: String(st.scholar_number ?? st.scholar_no ?? st.scholarNo ?? st.id ?? ""),
+      studentId: st.student_year_id || st.id,
+      studentName: st.name || "—",
+      studentClass: [st.class_name, st.class_section].filter(Boolean).join(" ") || "—",
+      year: rec.school_year || "—",
+      receiptNumber: rec.receipt_number,
+      paymentDate: rec.payment_date,
+    };
+    const payments = Array.isArray(rec.payments) ? rec.payments : [];
+
+    if (payments.length === 0) {
+      const paid = num(rec.total_amount_paid);
+      const due = num(rec.total_due ?? rec.due_amount);
+      rows.push({
+        ...base, id: `${rec.receipt_number}-${rIdx}`, month: "—", feeType: "—",
+        totalAmount: num(rec.total_amount ?? paid + due), paidAmount: paid, dueAmount: due,
+      });
+      return;
+    }
+
+    payments.forEach((p, pIdx) => {
+      const paid = num(p.amount_paid ?? p.paid_amount ?? p.amount);
+      const due = num(p.due_amount ?? p.balance ?? p.due);
+      rows.push({
+        ...base,
+        id: `${rec.receipt_number}-${rIdx}-${pIdx}`,
+        month: p.month || p.fee_type || "—",
+        feeType: p.fee_type || "—",
+        totalAmount: num(p.total_amount ?? p.fee_amount ?? paid + due),
+        paidAmount: paid,
+        dueAmount: due,
+      });
+    });
+  });
+  return rows;
+};
+
+/** Flat rows -> one summary per student (grouped by scholarNo + year) */
+const getGroupedStudents = (rows) => {
+  const map = new Map();
+  rows.forEach((r) => {
+    const key = `${r.scholarNo || r.studentName}__${r.year}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        key, scholarNo: r.scholarNo, studentName: r.studentName,
+        studentClass: r.studentClass, year: r.year,
+        totalFee: 0, totalPaid: 0, totalDue: 0, records: [],
+      });
+    }
+    const g = map.get(key);
+    g.totalFee += r.totalAmount;
+    g.totalPaid += r.paidAmount;
+    g.totalDue += r.dueAmount;
+    g.records.push(r);
+  });
+  return [...map.values()].map((g) => ({
+    ...g,
+    status: g.totalDue > 0 ? "Pending" : "Paid",
+    records: g.records.sort((a, b) => monthRank(a.month) - monthRank(b.month)),
+  }));
+};
+
+const StatusBadge = ({ status }) => {
+  const paid = status === "Paid";
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
+        paid
+          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+          : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+      }`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full ${paid ? "bg-emerald-500" : "bg-amber-500"}`} />
+      {status}
+    </span>
+  );
+};
+
+const KpiCard = ({ label, value, valueClass, icon, iconBg, iconColor }) => (
+  <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm p-6 flex items-center justify-between">
+    <div>
+      <p className="text-sm text-gray-500 dark:text-gray-400">{label}</p>
+      <p className={`text-3xl font-bold mt-1 ${valueClass}`}>{value}</p>
+    </div>
+    <div className={`w-14 h-14 rounded-xl flex items-center justify-center ${iconBg}`}>
+      <i className={`${icon} text-xl ${iconColor}`} />
+    </div>
+  </div>
+);
+
+/* ----------------------------- component ----------------------------- */
 
 const FeeSummaryTable = () => {
   const { axiosInstance } = useContext(AuthContext);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [downloading, setDownloading] = useState(false);
 
-  // Filter states
-  const [selectedMonth, setSelectedMonth] = useState("");
-  const [selectedClass, setSelectedClass] = useState("");
+  // download dropdown
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const downloadMenuRef = useRef(null);
+  useEffect(() => {
+    const onClickOutside = (e) => {
+      if (downloadMenuRef.current && !downloadMenuRef.current.contains(e.target)) {
+        setDownloadOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  // view state
+  const [currentView, setCurrentView] = useState("summary"); // "summary" | "flat"
+  const [expanded, setExpanded] = useState(() => new Set());
+
+  // server-side filters
   const [selectedSchoolYear, setSelectedSchoolYear] = useState("");
+  const [selectedClass, setSelectedClass] = useState("");
+  const [selectedMonth, setSelectedMonth] = useState("");
   const [selectedFeeType, setSelectedFeeType] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
-  const [searchTerm, setSearchTerm] = useState(""); // Input value
-  const [appliedSearch, setAppliedSearch] = useState(""); // Actual search value
 
-  // Data states
-  const [allStudents, setAllStudents] = useState([]);
+  // client-side instant search
+  const [searchTerm, setSearchTerm] = useState("");
+
+  // data
+  const [flatRecords, setFlatRecords] = useState([]);
   const [yearLevels, setYearLevels] = useState([]);
   const [schoolYears, setSchoolYears] = useState([]);
 
-  // Pagination state
+  // pagination (client-side)
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(15);
-  const [totalCount, setTotalCount] = useState(0);
-  const [nextUrl, setNextUrl] = useState(null);
-  const [prevUrl, setPrevUrl] = useState(null);
+  const pageSize = 15;
 
-  // Download loading state
-  const [downloading, setDownloading] = useState(false);
-
-  // Table ref for PDF export
-  const tableRef = useRef(null);
-  const searchInputRef = useRef(null);
-
-  // Fetch school years and year levels
+  /* ---------- initial dropdown data ---------- */
   useEffect(() => {
-    const fetchInitialData = async () => {
+    (async () => {
       try {
-        const [years, levels] = await Promise.all([
-          fetchSchoolYear(),
-          fetchYearLevels()
-        ]);
+        const [years, levels] = await Promise.all([fetchSchoolYear(), fetchYearLevels()]);
         setSchoolYears(years || []);
         setYearLevels(levels || []);
       } catch (err) {
         console.error("Error fetching initial data:", err);
       }
-    };
-    fetchInitialData();
+    })();
   }, []);
 
-  // Extract unique months from payments
-  const getMonthsFromPayments = useCallback((payments) => {
-    if (!payments || !Array.isArray(payments)) return [];
-    const months = payments
-      .filter(p => p.month)
-      .map(p => p.month)
-      .filter(month => month !== null && month !== undefined);
-    return [...new Set(months)];
-  }, []);
-  // Get all fee types from payments
-  const getFeeTypesFromPayments = useCallback((payments) => {
-    if (!payments || !Array.isArray(payments)) return [];
-    const feeTypes = payments
-      .filter(p => p.fee_type)
-      .map(p => p.fee_type)
-      .filter(type => type !== null && type !== undefined);
-    return [...new Set(feeTypes)];
-  }, []);
-
-  // ✅ Build query parameters - uses appliedSearch instead of searchTerm
-  const buildSearchParams = useCallback((page = 1, forDownload = false) => {
+  /* ---------- query string for server filters ---------- */
+  const buildParams = useCallback(() => {
     const params = new URLSearchParams();
-
-    if (selectedSchoolYear) {
-      const yearItem = schoolYears.find(
-        (year) => year.year_name === selectedSchoolYear
-      );
-      if (yearItem) {
-        params.append("school_year_id", yearItem.id);
-      }
-    }
-
-    if (selectedClass) {
-      const classItem = yearLevels.find(
-        (level) => level.level_name === selectedClass
-      );
-      if (classItem) {
-        params.append("class_id", classItem.id);
-      }
-    }
-
-    if (selectedMonth) {
-      params.append("month", selectedMonth);
-    }
-
-    if (selectedFeeType) {
-      params.append("fee_type", selectedFeeType);
-    }
-
-    if (fromDate) {
-      params.append("start_date", fromDate);
-    }
-    if (toDate) {
-      params.append("end_date", toDate);
-    }
-
-    // ✅ Use appliedSearch instead of searchTerm
-    if (appliedSearch.trim()) {
-      const searchValue = appliedSearch.trim();
-      if (searchValue.startsWith('REC-')) {
-        params.append("receipt_number", searchValue);
-      } else if (!isNaN(searchValue) && searchValue.length > 0) {
-        params.append("scholar_number", searchValue);
-      } else {
-        params.append("student", searchValue);
-      }
-    }
-
-    if (forDownload) {
-      params.append("limit", 10000);
-      params.append("offset", 0);
-    } else {
-      const offset = (page - 1) * pageSize;
-      params.append("limit", pageSize);
-      params.append("offset", offset);
-    }
-
+    const y = schoolYears.find((s) => s.year_name === selectedSchoolYear);
+    if (y) params.append("school_year_id", y.id);
+    const c = yearLevels.find((l) => l.level_name === selectedClass);
+    if (c) params.append("class_id", c.id);
+    if (selectedMonth) params.append("month", selectedMonth);
+    if (selectedFeeType) params.append("fee_type", selectedFeeType);
+    if (fromDate) params.append("start_date", fromDate);
+    if (toDate) params.append("end_date", toDate);
+    params.append("limit", 1000); // page size per request; we follow `next` below
+    params.append("offset", 0);
     return params.toString();
-  }, [selectedMonth, selectedClass, selectedSchoolYear, selectedFeeType, fromDate, toDate, appliedSearch, pageSize, yearLevels, schoolYears]);
+  }, [selectedSchoolYear, selectedClass, selectedMonth, selectedFeeType, fromDate, toDate, schoolYears, yearLevels]);
 
-  // Fetch all data for download (follow pagination via `next` links)
-  const fetchAllDataForDownload = useCallback(async () => {
-    setDownloading(true);
+  /* ---------- fetch ALL receipts (follow pagination) ---------- */
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const results = [];
-      // start with a request that uses large limit/offset params
-      let url = `/d/studentfees/search_receipts/?${buildSearchParams(1, true)}`;
-
+      const receipts = [];
+      let url = `/d/studentfees/search_receipts/?${buildParams()}`;
       while (url) {
-        const response = await axiosInstance.get(url);
-        if (response.status === 200 || response.status === 201) {
-          const data = response.data;
-          if (data && typeof data === 'object' && 'results' in data) {
-            if (Array.isArray(data.results)) {
-              results.push(...data.results);
-            }
-            url = data.next || null;
-          } else if (Array.isArray(data)) {
-            results.push(...data);
-            url = null;
-          } else {
-            url = null;
-          }
+        const res = await axiosInstance.get(url);
+        const data = res.data;
+        if (data && Array.isArray(data.results)) {
+          receipts.push(...data.results);
+          url = data.next || null;
+        } else if (Array.isArray(data)) {
+          receipts.push(...data);
+          url = null;
         } else {
           url = null;
         }
       }
-
-      return results;
+      setFlatRecords(normalizeReceipts(receipts));
     } catch (err) {
-      console.error("Error fetching data for download:", err);
-      throw err;
-    } finally {
-      setDownloading(false);
-    }
-  }, [buildSearchParams, axiosInstance]);
-
-  // ✅ Fetch data with proper error handling
-  const fetchData = useCallback(async (page = 1) => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const queryParams = buildSearchParams(page);
-      const response = await axiosInstance.get(
-        `/d/studentfees/search_receipts/?${queryParams}`
-      );
-
-      const data = response.data;
-
-      if (response.status === 200 || response.status === 201) {
-        if (data && typeof data === 'object' && 'results' in data) {
-          if (Array.isArray(data.results)) {
-            setAllStudents(data.results);
-            setTotalCount(data.count || data.results.length || 0);
-            setNextUrl(data.next || null);
-            setPrevUrl(data.previous || null);
-            setError(null);
-          } else {
-            setAllStudents([]);
-            setTotalCount(0);
-            setNextUrl(null);
-            setPrevUrl(null);
-            setError(null);
-          }
-        } else if (Array.isArray(data)) {
-          setAllStudents(data);
-          setTotalCount(data.length);
-          setNextUrl(null);
-          setPrevUrl(null);
-          setError(null);
-        } else if (data && typeof data === 'object' && 'detail' in data) {
-          setAllStudents([]);
-          setTotalCount(0);
-          setNextUrl(null);
-          setPrevUrl(null);
-          setError(null);
-        } else {
-          setAllStudents([]);
-          setTotalCount(0);
-          setNextUrl(null);
-          setPrevUrl(null);
-          setError(null);
-        }
-      } else {
-        setError(`Failed to fetch data. Status: ${response.status}`);
-      }
-    } catch (err) {
-      console.error("❌ Fetch error:", err);
-
-      if (err.response) {
-        const status = err.response.status;
-        if (status === 404 || status === 400) {
-          setAllStudents([]);
-          setTotalCount(0);
-          setNextUrl(null);
-          setPrevUrl(null);
-          setError(null);
-        } else if (status === 401) {
-          setError("Authentication failed. Please login again.");
-        } else if (status === 500) {
-          setError("Server error. Please try again later.");
-        } else {
-          setAllStudents([]);
-          setTotalCount(0);
-          setNextUrl(null);
-          setPrevUrl(null);
-          setError(null);
-        }
-      } else if (err.request) {
-        setError("Network error. Please check your connection.");
-      } else {
-        setError("An unexpected error occurred.");
-      }
+      console.error("Fetch error:", err);
+      const status = err?.response?.status;
+      if (status === 404 || status === 400) setFlatRecords([]);
+      else if (status === 401) setError("Authentication failed. Please login again.");
+      else if (status === 500) setError("Server error. Please try again later.");
+      else if (err?.request) setError("Network error. Please check your connection.");
+      else setError("An unexpected error occurred.");
     } finally {
       setLoading(false);
     }
-  }, [buildSearchParams, axiosInstance]);
+  }, [buildParams, axiosInstance]);
 
-  // Initial load
   useEffect(() => {
-    fetchData(1);
+    fetchData();
   }, [fetchData]);
 
-  // Handle filter changes
-  const handleFilterChange = useCallback((setter, value) => {
-    setter(value);
+  /* ---------- derived data ---------- */
+  const filteredFlat = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return flatRecords;
+    return flatRecords.filter(
+      (r) =>
+        r.studentName.toLowerCase().includes(q) ||
+        r.scholarNo.toLowerCase().includes(q) ||
+        String(r.receiptNumber || "").toLowerCase().includes(q)
+    );
+  }, [flatRecords, searchTerm]);
+
+  const groupedStudents = useMemo(() => getGroupedStudents(filteredFlat), [filteredFlat]);
+
+  const kpis = useMemo(
+    () => ({
+      students: groupedStudents.length,
+      collected: filteredFlat.reduce((s, r) => s + r.paidAmount, 0),
+      due: filteredFlat.reduce((s, r) => s + r.dueAmount, 0),
+    }),
+    [groupedStudents, filteredFlat]
+  );
+
+  const activeList = currentView === "summary" ? groupedStudents : filteredFlat;
+  const totalItems = activeList.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const startIndex = totalItems ? (safePage - 1) * pageSize : 0;
+  const pageItems = activeList.slice(startIndex, startIndex + pageSize);
+
+  const hasFilters = [selectedSchoolYear, selectedClass, selectedMonth, selectedFeeType, fromDate, toDate, searchTerm].some(Boolean);
+
+  /* ---------- handlers ---------- */
+  const onFilter = (setter) => (e) => {
+    setter(e.target.value);
     setCurrentPage(1);
-    setError(null);
-  }, []);
+    setExpanded(new Set());
+  };
 
-  // Handle date range with validation
-  const handleDateChange = useCallback((setter, value) => {
-    if (setter === setFromDate && toDate && value > toDate) {
-      alert("⚠️ From date cannot be greater than To date");
-      return;
-    }
-    if (setter === setToDate && fromDate && value < fromDate) {
-      alert("⚠️ To date cannot be less than From date");
-      return;
-    }
-    handleFilterChange(setter, value);
-  }, [fromDate, toDate, handleFilterChange]);
-
-  // Reset all filters
-  const resetFilters = useCallback(() => {
-    setSelectedMonth("");
-    setSelectedClass("");
-    setSelectedSchoolYear("");
-    setSelectedFeeType("");
-    setSearchTerm("");
-    setAppliedSearch("");
-    setFromDate("");
-    setToDate("");
+  const onDate = (setter, isFrom) => (e) => {
+    const v = e.target.value;
+    if (isFrom && toDate && v > toDate) return alert("⚠️ From date cannot be greater than To date");
+    if (!isFrom && fromDate && v < fromDate) return alert("⚠️ To date cannot be less than From date");
+    setter(v);
     setCurrentPage(1);
-    setError(null);
-    if (searchInputRef.current) {
-      searchInputRef.current.value = "";
-      searchInputRef.current.focus();
-    }
-  }, []);
+  };
 
-  // ✅ Search on button click or Enter key
-  const handleSearch = useCallback(() => {
-    setAppliedSearch(searchTerm);
-    setCurrentPage(1);
-    setError(null);
-  }, [searchTerm]);
+  const resetFilters = () => {
+    setSelectedSchoolYear(""); setSelectedClass(""); setSelectedMonth("");
+    setSelectedFeeType(""); setFromDate(""); setToDate(""); setSearchTerm("");
+    setCurrentPage(1); setExpanded(new Set());
+  };
 
-  // ✅ Only updates input value, doesn't trigger search
-  const handleSearchChange = useCallback((e) => {
-    const value = e.target.value;
-    setSearchTerm(value);
-  }, []);
-
-  // ✅ Enter key triggers search
-  const handleSearchKeyDown = useCallback((e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleSearch();
-    }
-  }, [handleSearch]);
-
-  // ✅ FIXED: Auto-fetch when filters change - added appliedSearch to dependencies
-  useEffect(() => {
-    if (currentPage === 1) {
-      fetchData(1);
-    }
-  }, [selectedMonth, selectedClass, selectedSchoolYear, selectedFeeType, fromDate, toDate, appliedSearch, fetchData, currentPage]);
-
-  // Pagination handlers
-  const goToPreviousPage = useCallback(() => {
-    if (currentPage > 1) {
-      const newPage = currentPage - 1;
-      setCurrentPage(newPage);
-      fetchData(newPage);
-    }
-  }, [currentPage, fetchData]);
-
-  const goToNextPage = useCallback(() => {
-    if (nextUrl) {
-      const newPage = currentPage + 1;
-      setCurrentPage(newPage);
-      fetchData(newPage);
-    }
-  }, [nextUrl, fetchData]);
-
-  // Calculate pagination info
-  const totalPages = Math.ceil(totalCount / pageSize);
-  const startIndex = totalCount > 0 ? (currentPage - 1) * pageSize + 1 : 0;
-  const endIndex = Math.min(currentPage * pageSize, totalCount);
-
-  // 📥 DOWNLOAD FUNCTIONS
-
-  // Prepare data for export with total row
-  const prepareExportData = useCallback((data) => {
-    const exportData = data.map((record, index) => {
-      const monthsPaid = getMonthsFromPayments(record.payments);
-      const feeTypes = getFeeTypesFromPayments(record.payments);
-
-      return {
-        "S.No": index + 1,
-        "Receipt No": record.receipt_number || "—",
-        "Student Name": record.student?.name || "—",
-        "Class": record.student?.class_name || "—",
-        "Section": record.student?.class_section || "—",
-        "School Year": record.school_year || "—",
-        "Fee Types": feeTypes.join(", ") || "—",
-        "Months Paid": monthsPaid.join(", ") || "—",
-        "Payment Date": record.payment_date || "—",
-        "Paid Amount": `${record.total_amount_paid || 0}`,
-      };
+  const toggleExpand = (key) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
     });
 
-    const totalPaidAmount = data.reduce((sum, record) => {
-      return sum + (parseFloat(record.total_amount_paid) || 0);
-    }, 0);
+  const switchView = (v) => {
+    setCurrentView(v);
+    setCurrentPage(1);
+  };
 
-    if (exportData.length > 0) {
-      exportData.push({
-        "S.No": "",
-        "Receipt No": "",
-        "Student Name": "",
-        "Class": "",
-        "Section": "",
-        "School Year": "",
-        "Fee Types": "",
-        "Months Paid": "",
-        "Payment Date": "TOTAL",
-        "Paid Amount": totalPaidAmount.toFixed(2),
+  /* ---------- export ---------- */
+  const getExport = () => {
+    if (currentView === "summary") {
+      const rows = groupedStudents.map((g, i) => ({
+        "#": i + 1, "Scholar No": g.scholarNo, "Student Name": g.studentName,
+        Class: g.studentClass, Year: g.year, "Total Fee": g.totalFee.toFixed(2),
+        "Total Paid": g.totalPaid.toFixed(2), "Total Due": g.totalDue.toFixed(2), Status: g.status,
+      }));
+      rows.push({
+        "#": "", "Scholar No": "", "Student Name": "", Class: "", Year: "TOTAL",
+        "Total Fee": groupedStudents.reduce((s, g) => s + g.totalFee, 0).toFixed(2),
+        "Total Paid": kpis.collected.toFixed(2), "Total Due": kpis.due.toFixed(2), Status: "",
       });
+      return rows;
     }
+    const rows = filteredFlat.map((r, i) => ({
+      "#": i + 1, "Receipt No": r.receiptNumber || "—", "Scholar No": r.scholarNo,
+      "Student Name": r.studentName, Class: r.studentClass, Year: r.year, Month: r.month,
+      "Fee Type": r.feeType, "Payment Date": r.paymentDate || "—",
+      "Total Amount": r.totalAmount.toFixed(2), "Paid Amount": r.paidAmount.toFixed(2),
+      "Due Amount": r.dueAmount.toFixed(2), Status: r.dueAmount > 0 ? "Pending" : "Paid",
+    }));
+    return rows;
+  };
 
-    return exportData;
-  }, [getMonthsFromPayments, getFeeTypesFromPayments]);
+  const fileName = () => {
+    let f = currentView === "summary" ? "fee_summary" : "fee_records";
+    if (selectedSchoolYear) f += `_${selectedSchoolYear}`;
+    if (selectedClass) f += `_${selectedClass}`;
+    if (selectedMonth) f += `_${selectedMonth}`;
+    return `${f}_${new Date().toISOString().split("T")[0]}`;
+  };
 
-  // 📥 Download as Excel
-  const downloadExcel = useCallback(async () => {
-    if (allStudents.length === 0) {
-      alert("No data available to download!");
-      return;
-    }
-
+  const downloadExcel = () => {
+    if (!totalItems) return alert("No data available to download!");
     setDownloading(true);
     try {
-      let dataToExport = allStudents;
-
-      if (totalCount > allStudents.length) {
-        const allData = await fetchAllDataForDownload();
-        if (allData.length > 0) {
-          dataToExport = allData;
-        }
-      }
-
-      const exportData = prepareExportData(dataToExport);
-
-      const ws = XLSX.utils.json_to_sheet(exportData);
-
-      const colWidths = Object.keys(exportData[0] || {}).map(key => ({
-        wch: Math.max(key.length, 15)
-      }));
-      ws['!cols'] = colWidths;
-
+      const data = getExport();
+      const ws = XLSX.utils.json_to_sheet(data);
+      ws["!cols"] = Object.keys(data[0]).map((k) => ({ wch: Math.max(k.length, 15) }));
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Fee Records");
-
-      let filename = "fee_records";
-      if (selectedSchoolYear) filename += `_${selectedSchoolYear}`;
-      if (selectedClass) filename += `_${selectedClass}`;
-      if (selectedMonth) filename += `_${selectedMonth}`;
-      filename += `_${new Date().toISOString().split('T')[0]}`;
-
-      XLSX.writeFile(wb, `${filename}.xlsx`);
-
-    } catch (error) {
-      console.error("Error downloading Excel:", error);
+      XLSX.writeFile(wb, `${fileName()}.xlsx`);
+    } catch (e) {
+      console.error(e);
       alert("Failed to download Excel file. Please try again.");
     } finally {
       setDownloading(false);
     }
-  }, [allStudents, totalCount, fetchAllDataForDownload, prepareExportData, selectedSchoolYear, selectedClass, selectedMonth]);
+  };
 
-  // 📥 Download as PDF
-  const downloadPDF = useCallback(async () => {
-    if (allStudents.length === 0) {
-      alert("No data available to download!");
-      return;
-    }
-
+  const downloadPDF = () => {
+    if (!totalItems) return alert("No data available to download!");
     setDownloading(true);
     try {
-      let dataToExport = allStudents;
-
-      if (totalCount > allStudents.length) {
-        const allData = await fetchAllDataForDownload();
-        if (allData.length > 0) {
-          dataToExport = allData;
-        }
-      }
-
-      const exportData = prepareExportData(dataToExport);
-
-      const totalPaidAmount = dataToExport.reduce((sum, record) => {
-        return sum + (parseFloat(record.total_amount_paid) || 0);
-      }, 0);
-
-      const doc = new jsPDF('landscape', 'mm', 'a4');
-      const pageWidth = doc.internal.pageSize.getWidth();
-
+      const data = getExport();
+      const doc = new jsPDF("landscape", "mm", "a4");
+      const w = doc.internal.pageSize.getWidth();
       doc.setFontSize(16);
-      doc.setTextColor(0, 0, 0);
-      doc.text('Students Fee Records', pageWidth / 2, 15, { align: 'center' });
-
-      let filterText = [];
-      if (selectedSchoolYear) filterText.push(`School Year: ${selectedSchoolYear}`);
-      if (selectedClass) filterText.push(`Class: ${selectedClass}`);
-      if (selectedMonth) filterText.push(`Month: ${selectedMonth}`);
-      if (selectedFeeType) filterText.push(`Fee Type: ${selectedFeeType}`);
-      if (fromDate && toDate) filterText.push(`Date: ${fromDate} to ${toDate}`);
-      if (appliedSearch) filterText.push(`Search: ${appliedSearch}`);
-
-      if (filterText.length > 0) {
-        doc.setFontSize(10);
-        doc.setTextColor(100, 100, 100);
-        doc.text(`Filters: ${filterText.join(' | ')}`, 14, 22);
-      }
-
-      doc.setFontSize(10);
-      doc.setTextColor(100, 100, 100);
-      doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 28);
-
-      const tableData = exportData.map(row => Object.values(row));
-      const headers = Object.keys(exportData[0] || {});
-
+      doc.text(currentView === "summary" ? "Fee Summary" : "Students Fee Records", w / 2, 15, { align: "center" });
+      doc.setFontSize(9);
+      doc.setTextColor(100);
+      doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 22);
       autoTable(doc, {
-        head: [headers],
-        body: tableData,
-        startY: 32,
-        styles: {
-          fontSize: 7,
-          cellPadding: 2,
-          overflow: 'linebreak',
-        },
-        headStyles: {
-          fillColor: [41, 128, 185],
-          textColor: 255,
-          fontSize: 8,
-          fontStyle: 'bold',
-        },
-        didParseCell: function (data) {
-          if (data.row.index === data.table.body.length - 1 && data.row.raw.some(cell => String(cell).includes('TOTAL'))) {
-            data.cell.styles.fillColor = [240, 240, 240];
-            data.cell.styles.fontStyle = 'bold';
-            data.cell.styles.textColor = [0, 0, 0];
-          }
-        },
-        columnStyles: {
-          0: { cellWidth: 12 },
-          1: { cellWidth: 25 },
-          2: { cellWidth: 30 },
-          3: { cellWidth: 20 },
-          4: { cellWidth: 18 },
-          5: { cellWidth: 25 },
-          6: { cellWidth: 40 },
-          7: { cellWidth: 35 },
-          8: { cellWidth: 25 },
-          9: { cellWidth: 25 },
-        },
+        head: [Object.keys(data[0])],
+        body: data.map((r) => Object.values(r)),
+        startY: 26,
+        styles: { fontSize: 7, cellPadding: 2 },
+        headStyles: { fillColor: [107, 33, 168], textColor: 255 },
         margin: { left: 10, right: 10 },
-        didDrawPage: function (data) {
-          const pageNumber = doc.internal.getCurrentPageInfo().pageNumber;
-          const totalPages = doc.internal.getNumberOfPages();
-          doc.setFontSize(8);
-          doc.setTextColor(150, 150, 150);
-          doc.text(
-            `Page ${pageNumber} of ${totalPages}`,
-            pageWidth - 30,
-            doc.internal.pageSize.getHeight() - 10
-          );
-
-          if (data.pageNumber === totalPages) {
-            doc.setFontSize(10);
-            doc.setTextColor(0, 0, 0);
-            doc.text(
-              `Total Paid Amount: ${totalPaidAmount.toFixed(2)}`,
-              14,
-              doc.internal.pageSize.getHeight() - 15
-            );
-          }
-        }
       });
-
-      let filename = "fee_records";
-      if (selectedSchoolYear) filename += `_${selectedSchoolYear}`;
-      if (selectedClass) filename += `_${selectedClass}`;
-      if (selectedMonth) filename += `_${selectedMonth}`;
-      filename += `_${new Date().toISOString().split('T')[0]}`;
-
-      doc.save(`${filename}.pdf`);
-
-    } catch (error) {
-      console.error("Error downloading PDF:", error);
+      doc.save(`${fileName()}.pdf`);
+    } catch (e) {
+      console.error(e);
       alert("Failed to download PDF file. Please try again.");
     } finally {
       setDownloading(false);
     }
-  }, [allStudents, totalCount, fetchAllDataForDownload, prepareExportData, selectedSchoolYear, selectedClass, selectedMonth, selectedFeeType, fromDate, toDate, appliedSearch]);
+  };
 
-  // Loading state
+  /* ---------- early returns ---------- */
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen">
         <div className="flex space-x-2">
-          <div className="w-3 h-3 bgTheme rounded-full animate-bounce"></div>
-          <div className="w-3 h-3 bgTheme rounded-full animate-bounce [animation-delay:-0.2s]"></div>
-          <div className="w-3 h-3 bgTheme rounded-full animate-bounce [animation-delay:-0.4s]"></div>
+          <div className="w-3 h-3 bgTheme rounded-full animate-bounce" />
+          <div className="w-3 h-3 bgTheme rounded-full animate-bounce [animation-delay:-0.2s]" />
+          <div className="w-3 h-3 bgTheme rounded-full animate-bounce [animation-delay:-0.4s]" />
         </div>
         <p className="mt-2 text-gray-500 text-sm">Loading data...</p>
       </div>
     );
   }
 
-  // Error state
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen">
         <div className="bg-red-50 border border-red-200 text-red-700 px-6 py-4 rounded-lg max-w-md">
-          <div className="flex items-start">
-            <svg className="w-6 h-6 mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-            </svg>
-            <div>
-              <h3 className="font-semibold">Error Loading Data</h3>
-              <p className="text-sm mt-1">{error}</p>
-              <button
-                onClick={() => fetchData(currentPage)}
-                className="mt-3 bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-sm transition"
-              >
-                Try Again
-              </button>
-            </div>
-          </div>
+          <h3 className="font-semibold">Error Loading Data</h3>
+          <p className="text-sm mt-1">{error}</p>
+          <button onClick={fetchData} className="mt-3 bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-sm">
+            Try Again
+          </button>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="min-h-screen px-2 py-5 bg-gray-50 dark:bg-gray-900 mb-24 md:mb-10">
-      <div className="bg-white dark:bg-gray-800 w-[96%] max-w-[1700px] p-6 rounded-xl shadow-lg mx-auto">
-        <div className="mb-4">
-          <h1 className="text-2xl md:text-3xl font-bold text-gray-800 dark:text-gray-100 text-center">
-            <i className="fa-solid fa-graduation-cap mr-2"></i> Students Fee Record
-          </h1>
+  const selectCls =
+    "select select-bordered w-full focus:outline-none dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600";
+  const th = "px-4 py-4 text-left text-xs font-bold uppercase tracking-wider";
 
-          <div className="text-center mt-2">
-            <span className="text-sm text-gray-500 dark:text-gray-400">
-              {totalCount > 0 ? (
-                <>Showing <strong>{allStudents.length}</strong> of <strong>{totalCount}</strong> records</>
-              ) : (
-                <span className="text-gray-400">📭 No records found</span>
-              )}
-              {Object.values({ selectedSchoolYear, selectedClass, selectedMonth, selectedFeeType, fromDate, toDate, appliedSearch }).some(v => v) && (
-                <span className="ml-2 text-blue-600 dark:text-blue-400">🔍 Filtered</span>
-              )}
-            </span>
+  /* ----------------------------- render ----------------------------- */
+  return (
+    <div className="min-h-screen px-4 py-8 bg-gray-50 dark:bg-gray-900 mb-24 md:mb-10">
+      <div className="w-[96%] max-w-[1700px] mx-auto space-y-6">
+        {/* Header + view toggle */}
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Fee Summary & Records</h1>
+            <p className="text-gray-500 dark:text-gray-400 mt-1">
+              Manage student fee collections, review monthly breakdowns, and track dues.
+            </p>
+          </div>
+          <div className="flex gap-1 p-1.5 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl shadow-sm">
+            {[
+              ["summary", "fa-solid fa-layer-group", "Summary View"],
+              ["flat", "fa-solid fa-list", "Flat Monthly Records"],
+            ].map(([key, icon, label]) => (
+              <button
+                key={key}
+                onClick={() => switchView(key)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition ${
+                  currentView === key
+                    ? "bg-[#6B21A8] text-white shadow"
+                    : "text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                }`}
+              >
+                <i className={icon} /> {label}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Filter Section */}
-        <div className="w-full px-5">
-          <div className="flex flex-wrap justify-between items-end gap-4 mb-2 w-full border-b pb-4 border-gray-200 dark:border-gray-700">
-            <div className="flex flex-wrap items-end gap-4 w-full">
-              {/* School Year Filter */}
-              <div className="flex flex-col w-full sm:w-auto min-w-[150px]">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  School Year
-                </label>
-                <select
-                  className="select select-bordered w-full focus:outline-none dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600"
-                  value={selectedSchoolYear}
-                  onChange={(e) =>
-                    handleFilterChange(setSelectedSchoolYear, e.target.value)
-                  }
-                >
-                  <option value="">All Years</option>
-                  {schoolYears.map((year) => (
-                    <option key={year.id} value={year.year_name}>
-                      {year.year_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+        {/* KPI cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <KpiCard label="Total Students" value={kpis.students} valueClass="text-gray-900 dark:text-gray-100"
+            icon="fa-solid fa-user-graduate" iconBg="bg-purple-100 dark:bg-purple-900/40" iconColor="text-purple-700 dark:text-purple-300" />
+          <KpiCard label="Total Fee Collected" value={inr(kpis.collected)} valueClass="text-emerald-600"
+            icon="fa-solid fa-indian-rupee-sign" iconBg="bg-emerald-100 dark:bg-emerald-900/40" iconColor="text-emerald-700 dark:text-emerald-300" />
+          <KpiCard label="Total Pending / Due Amount" value={inr(kpis.due)} valueClass="text-amber-600"
+            icon="fa-solid fa-clock" iconBg="bg-amber-100 dark:bg-amber-900/40" iconColor="text-amber-700 dark:text-amber-300" />
+        </div>
 
-              {/* Class Filter */}
-              <div className="flex flex-col w-full sm:w-auto min-w-[150px]">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Class
-                </label>
-                <select
-                  className="select select-bordered w-full focus:outline-none dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600"
-                  value={selectedClass}
-                  onChange={(e) =>
-                    handleFilterChange(setSelectedClass, e.target.value)
-                  }
-                >
-                  <option value="">All Classes</option>
-                  {yearLevels.map((level) => (
-                    <option key={level.id} value={level.level_name}>
-                      {level.level_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+        {/* Filters + search */}
+        <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm p-5 space-y-4">
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="flex flex-col min-w-[150px] w-full sm:w-auto">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">School Year</label>
+              <select className={selectCls} value={selectedSchoolYear} onChange={onFilter(setSelectedSchoolYear)}>
+                <option value="">All Years</option>
+                {schoolYears.map((y) => <option key={y.id} value={y.year_name}>{y.year_name}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col min-w-[150px] w-full sm:w-auto">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Class</label>
+              <select className={selectCls} value={selectedClass} onChange={onFilter(setSelectedClass)}>
+                <option value="">All Classes</option>
+                {yearLevels.map((l) => <option key={l.id} value={l.level_name}>{l.level_name}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col min-w-[150px] w-full sm:w-auto">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Month</label>
+              <select className={selectCls} value={selectedMonth} onChange={onFilter(setSelectedMonth)}>
+                <option value="">All Months</option>
+                {MONTHS.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col min-w-[150px] w-full sm:w-auto">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Fee Type</label>
+              <select className={selectCls} value={selectedFeeType} onChange={onFilter(setSelectedFeeType)}>
+                <option value="">All Types</option>
+                {FEE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col min-w-[150px] w-full sm:w-auto">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">From Date</label>
+              <input type="date" value={fromDate} onChange={onDate(setFromDate, true)}
+                className="input input-bordered w-full focus:outline-none dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600" />
+            </div>
+            <div className="flex flex-col min-w-[150px] w-full sm:w-auto">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">To Date</label>
+              <input type="date" value={toDate} onChange={onDate(setToDate, false)}
+                className="input input-bordered w-full focus:outline-none dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600" />
+            </div>
+          </div>
 
-              {/* Month Filter */}
-              <div className="flex flex-col w-full sm:w-auto min-w-[150px]">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Month
-                </label>
-                <select
-                  className="select select-bordered w-full focus:outline-none dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600"
-                  value={selectedMonth}
-                  onChange={(e) =>
-                    handleFilterChange(setSelectedMonth, e.target.value)
-                  }
-                >
-                  <option value="">All Months</option>
-                  {[
-                    "January", "February", "March", "April", "May", "June",
-                    "July", "August", "September", "October", "November", "December"
-                  ].map((month) => (
-                    <option key={month} value={month}>
-                      {month}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Fee Type Filter */}
-              <div className="flex flex-col w-full sm:w-auto min-w-[150px]">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Fee Type
-                </label>
-                <select
-                  className="select select-bordered w-full focus:outline-none dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600"
-                  value={selectedFeeType}
-                  onChange={(e) =>
-                    handleFilterChange(setSelectedFeeType, e.target.value)
-                  }
-                >
-                  <option value="">All Types</option>
-                  <option value="Tuition Fee (General)">Tuition Fee (General)</option>
-                  <option value="Tuition Fee (PCM/PCB)">Tuition Fee (PCM/PCB)</option>
-                  <option value="Tuition Fee (Comm/Arts)">Tution Fee (Comm/Arts)</option>
-                  <option value="Admission Fee">Admission Fee</option>
-                  <option value="Exam Fee">Exam Fee</option>
-                  <option value="Activity Fee">Activity Fee</option>
-                  <option value="Caution Fee">Caution Fee</option>
-                  <option value="Maintenance">Maintenance</option>
-                  <option value="Others">Others</option>
-                </select>
-              </div>
-
-              {/* Date Range Filters */}
-              <div className="flex flex-col w-full sm:w-auto min-w-[150px]">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  From Date
-                </label>
-                <input
-                  type="date"
-                  className="input input-bordered w-full focus:outline-none dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600"
-                  value={fromDate}
-                  onChange={(e) => handleDateChange(setFromDate, e.target.value)}
-                />
-              </div>
-
-              <div className="flex flex-col w-full sm:w-auto min-w-[150px]">
-                <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  To Date
-                </label>
-                <input
-                  type="date"
-                  className="input input-bordered w-full focus:outline-none dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600"
-                  value={toDate}
-                  onChange={(e) => handleDateChange(setToDate, e.target.value)}
-                />
-              </div>
-
-              {/* Reset Button */}
-              <div className="mt-1 w-full sm:w-auto">
-                <button
-                  onClick={resetFilters}
-                  className="bgTheme text-white text-sm px-5 py-2 rounded font-semibold h-10 w-full sm:w-auto hover:bg-opacity-80 transition"
-                >
-                  Reset Filters
-                </button>
-              </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative flex-1 min-w-[260px] max-w-xl">
+              <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+                placeholder="Search by student name or scholar no..."
+                className="w-full pl-11 pr-4 py-3 rounded-xl border border-gray-200 bg-gray-50 dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-purple-300"
+              />
             </div>
 
-            {/* ✅ Search with Button */}
-            <div className="flex flex-col w-full sm:flex-row sm:items-end gap-4 sm:w-auto">
-              <div className="flex gap-2 w-full sm:w-auto">
-                <input
-                  ref={searchInputRef}
-                  type="text"
-                  placeholder="Search by name, receipt, scholar..."
-                  value={searchTerm}
-                  onChange={handleSearchChange}
-                  onKeyDown={handleSearchKeyDown}
-                  className="border px-3 py-2 rounded w-full sm:w-64 dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600 focus:outline-none"
-                />
-                <button
-                  onClick={handleSearch}
-                  className="bgTheme text-white px-4 py-2 rounded font-semibold h-10 flex items-center gap-2 hover:bg-opacity-80 transition"
-                  type="button"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                  Search
-                </button>
-              </div>
-
-              <Link
-                to={allRouterLink.feeDashboard}
-                className="bgTheme text-white text-sm px-5 py-2 rounded font-semibold h-10 w-full sm:w-auto text-center hover:bg-opacity-80 transition"
-              >
+            <div className="ml-auto flex flex-wrap items-center gap-3">
+              <span className="px-4 py-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-sm font-medium text-gray-600 dark:text-gray-300">
+                {currentView === "summary" ? `Showing ${groupedStudents.length} students` : `Showing ${filteredFlat.length} records`}
+              </span>
+              <button onClick={resetFilters}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-50 dark:bg-purple-900/30 text-[#6B21A8] dark:text-purple-300 font-semibold hover:bg-purple-100 transition">
+                <i className="fa-solid fa-rotate-right" /> Reset
+              </button>
+              <Link to={allRouterLink.feeDashboard}
+                className="px-4 py-2 rounded-lg bg-[#6B21A8] text-white text-sm font-semibold hover:opacity-90 transition">
                 Fee Dashboard
               </Link>
-
-              {/* Download Buttons */}
-              <div className="flex gap-2 w-full sm:w-auto">
+              {/* Download dropdown */}
+              <div className="relative" ref={downloadMenuRef}>
                 <button
-                  onClick={downloadExcel}
-                  disabled={downloading || allStudents.length === 0}
-                  className={`text-white text-sm px-4 py-2 rounded font-semibold h-10 flex items-center justify-center gap-2 transition ${downloading || allStudents.length === 0
-                      ? "bg-gray-400 cursor-not-allowed"
-                      : "bg-green-600 hover:bg-green-700"
-                    }`}
+                  type="button"
+                  onClick={() => setDownloadOpen((o) => !o)}
+                  disabled={downloading || !totalItems}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-semibold transition ${
+                    downloading || !totalItems
+                      ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+                      : "bg-purple-50 text-[#6B21A8] border-purple-300 hover:bg-purple-100 dark:bg-purple-900/30 dark:text-purple-300 dark:border-purple-700"
+                  }`}
                 >
-                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
-                  </svg>
-                  {downloading ? "..." : "Excel"}
+                  <i className="fa-solid fa-file-arrow-down" />
+                  {downloading ? "Preparing..." : "Download All Fee Info"}
+                  <i className={`fa-solid fa-caret-down transition-transform ${downloadOpen ? "rotate-180" : ""}`} />
                 </button>
 
-                <button
-                  onClick={downloadPDF}
-                  disabled={downloading || allStudents.length === 0}
-                  className={`text-white text-sm px-4 py-2 rounded font-semibold h-10 flex items-center justify-center gap-2 transition ${downloading || allStudents.length === 0
-                      ? "bg-gray-400 cursor-not-allowed"
-                      : "bg-red-600 hover:bg-red-700"
-                    }`}
-                >
-                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
-                  </svg>
-                  {downloading ? "..." : "PDF"}
-                </button>
+                {downloadOpen && (
+                  <div className="absolute right-0 mt-2 w-60 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-lg shadow-lg z-20 py-1">
+                    <button
+                      type="button"
+                      onClick={() => { setDownloadOpen(false); downloadPDF(); }}
+                      className="w-full text-left px-4 py-3 text-sm text-gray-700 dark:text-gray-200 hover:bg-purple-50 dark:hover:bg-gray-700 transition"
+                    >
+                      Download as PDF
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setDownloadOpen(false); downloadExcel(); }}
+                      className="w-full text-left px-4 py-3 text-sm text-gray-700 dark:text-gray-200 hover:bg-purple-50 dark:hover:bg-gray-700 transition"
+                    >
+                      Download as Excel (.xlsx)
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
         </div>
 
-        {/* Table Section */}
-        <div className="w-full overflow-x-auto max-h-[70vh] rounded-lg" ref={tableRef}>
-          <table className="min-w-full rounded-lg">
-            <thead className="bgTheme text-white sticky top-0">
-              <tr>
-                <th className="px-4 py-3 text-left">S.No</th>
-                <th className="px-4 py-3 text-left">Receipt No</th>
-                <th className="px-4 py-3 text-left">Student Name</th>
-                <th className="px-4 py-3 text-left">Class</th>
-                <th className="px-4 py-3 text-left">Section</th>
-                <th className="px-4 py-3 text-left">School Year</th>
-                <th className="px-4 py-3 text-left">Fee Types</th>
-                <th className="px-4 py-3 text-left">Months Paid</th>
-                <th className="px-4 py-3 text-left">Payment Date</th>
-                <th className="px-4 py-3 text-left">Paid Amount</th>
-                <th className="px-4 py-3 text-left">View</th>
-              </tr>
-            </thead>
-
-            <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
-              {allStudents.length === 0 ? (
-                <tr>
-                  <td colSpan="11" className="text-center py-12">
-                    <div className="flex flex-col items-center justify-center">
-                      <svg
-                        className="w-16 h-16 text-gray-300 dark:text-gray-600 mb-3"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                        />
-                      </svg>
-                      <p className="text-gray-500 dark:text-gray-400 text-lg font-medium">
-                        No Records Found
-                      </p>
-                      <p className="text-gray-400 dark:text-gray-500 text-sm mt-1">
-                        {Object.values({ selectedSchoolYear, selectedClass, selectedMonth, selectedFeeType, fromDate, toDate, appliedSearch }).some(v => v)
-                          ? "Try adjusting your filters or search criteria"
-                          : "No data available to display"}
-                      </p>
-                      {Object.values({ selectedSchoolYear, selectedClass, selectedMonth, selectedFeeType, fromDate, toDate, appliedSearch }).some(v => v) && (
-                        <button
-                          onClick={resetFilters}
-                          className="mt-4 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 text-sm font-medium underline"
-                        >
-                          Clear all filters
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ) : (
-                allStudents.map((record, index) => {
-                  const monthsPaid = getMonthsFromPayments(record.payments);
-                  const feeTypes = getFeeTypesFromPayments(record.payments);
-
-                  return (
-                    <tr
-                      key={record.receipt_number || index}
-                      className="hover:bg-gray-50 dark:hover:bg-gray-700 transition"
-                    >
-                      <td className="px-4 py-3 text-gray-800 dark:text-gray-100 text-nowrap">
-                        {startIndex + index}
-                      </td>
-
-                      <td className="px-4 py-3 text-gray-800 dark:text-gray-100 text-nowrap">
-                        {record.receipt_number}
-                      </td>
-
-                      <td className="px-4 py-3 text-gray-800 dark:text-gray-100 text-nowrap">
-                        {record.student?.name || "—"}
-                      </td>
-
-                      <td className="px-4 py-3 text-gray-800 dark:text-gray-100 text-nowrap">
-                        {record.student?.class_name || "—"}
-                      </td>
-
-                      <td className="px-4 py-3 text-gray-800 dark:text-gray-100 text-nowrap">
-                        {record.student?.class_section || "—"}
-                      </td>
-
-                      <td className="px-4 py-3 text-gray-800 dark:text-gray-100 text-nowrap">
-                        {record.school_year || "—"}
-                      </td>
-
-                      <td className="px-4 py-3 text-gray-800 dark:text-gray-100">
-                        {feeTypes.length > 0 ? (
-                          <div className="flex flex-wrap gap-1">
-                            {feeTypes.map((type, idx) => (
-                              <span
-                                key={idx}
-                                className="inline-block bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs px-2 py-1 rounded"
+        {/* Table */}
+        <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm overflow-hidden">
+          <div className="w-full overflow-x-auto max-h-[70vh]">
+            {currentView === "summary" ? (
+              <table className="min-w-full">
+                <thead className="bg-[#6B21A8] text-white sticky top-0 z-10">
+                  <tr>
+                    <th className={th}>#</th>
+                    <th className={th}>Scholar No.</th>
+                    <th className={th}>Student Name</th>
+                    <th className={th}>Class</th>
+                    <th className={th}>Year</th>
+                    <th className={`${th} text-right`}>Total Fee</th>
+                    <th className={`${th} text-right`}>Total Paid</th>
+                    <th className={`${th} text-right`}>Total Due</th>
+                    <th className={th}>Status</th>
+                    <th className={`${th} text-center`}>Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                  {pageItems.length === 0 ? (
+                    <EmptyRow cols={10} hasFilters={hasFilters} onReset={resetFilters} />
+                  ) : (
+                    pageItems.map((g, i) => {
+                      const open = expanded.has(g.key);
+                      return (
+                        <React.Fragment key={g.key}>
+                          <tr className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
+                            <td className="px-4 py-4 text-gray-600 dark:text-gray-300">{startIndex + i + 1}</td>
+                            <td className="px-4 py-4 font-mono text-sm text-purple-800 dark:text-purple-300">{g.scholarNo || "—"}</td>
+                            <td className="px-4 py-4 font-bold text-gray-900 dark:text-gray-100 whitespace-nowrap">{g.studentName}</td>
+                            <td className="px-4 py-4 text-gray-600 dark:text-gray-300 whitespace-nowrap">{g.studentClass}</td>
+                            <td className="px-4 py-4 text-gray-600 dark:text-gray-300 whitespace-nowrap">{g.year}</td>
+                            <td className="px-4 py-4 text-right font-medium text-gray-900 dark:text-gray-100 whitespace-nowrap">{inr(g.totalFee)}</td>
+                            <td className="px-4 py-4 text-right font-medium text-emerald-600 whitespace-nowrap">{inr(g.totalPaid)}</td>
+                            <td className="px-4 py-4 text-right font-medium text-amber-600 whitespace-nowrap">{inr(g.totalDue)}</td>
+                            <td className="px-4 py-4"><StatusBadge status={g.status} /></td>
+                            <td className="px-4 py-4 text-center">
+                              <button
+                                onClick={() => toggleExpand(g.key)}
+                                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-50 dark:bg-purple-900/30 text-[#6B21A8] dark:text-purple-300 text-sm font-semibold hover:bg-purple-100 transition whitespace-nowrap"
                               >
-                                {type}
-                              </span>
-                            ))}
-                          </div>
-                        ) : "—"}
-                      </td>
+                                {open ? "Hide" : "View"} Breakdown ({g.records.length})
+                                <i className={`fa-solid fa-chevron-${open ? "up" : "down"} text-xs`} />
+                              </button>
+                            </td>
+                          </tr>
 
-                      <td className="px-4 py-3 text-gray-800 dark:text-gray-100">
-                        {monthsPaid.length > 0 ? (
-                          <div className="flex flex-wrap gap-1">
-                            {monthsPaid.map((month, idx) => (
-                              <span
-                                key={idx}
-                                className="inline-block bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 text-xs px-2 py-1 rounded"
-                              >
-                                {month}
-                              </span>
-                            ))}
-                          </div>
-                        ) : "—"}
-                      </td>
-
-                      <td className="px-4 py-3 text-gray-800 dark:text-gray-100 text-nowrap">
-                        {record.payment_date || "—"}
-                      </td>
-
-                      <td className="px-4 py-3 text-gray-800 dark:text-gray-100 text-nowrap font-semibold">
-                        {record.total_amount_paid}
-                      </td>
-
-                      <td className="px-4 py-3 text-center">
-                        <Link
-                          to={allRouterLink.viewFeesDetails
-                            .replace(":id", record.student?.student_year_id || record.student?.id)
-                            .replace(":receipt_number", record.receipt_number)}
-                          className="underline textTheme hover:text-blue-800 dark:hover:text-blue-200"
-                        >
-                          View
-                        </Link>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination Controls */}
-        {totalCount > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-4 mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-            <div className="text-sm text-gray-600 dark:text-gray-300">
-              Showing {startIndex}–{endIndex} of {totalCount} entries
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={goToPreviousPage}
-                disabled={currentPage === 1}
-                className={`px-4 py-2 rounded border ${currentPage === 1
-                    ? "bg-gray-100 dark:bg-gray-700 text-gray-400 cursor-not-allowed"
-                    : "bgTheme text-white hover:bg-opacity-80"
-                  }`}
-              >
-                Previous
-              </button>
-              <span className="text-sm text-gray-700 dark:text-gray-300">
-                Page {currentPage} of {totalPages || 1}
-              </span>
-              <button
-                onClick={goToNextPage}
-                disabled={!nextUrl}
-                className={`px-4 py-2 rounded border ${!nextUrl
-                    ? "bg-gray-100 dark:bg-gray-700 text-gray-400 cursor-not-allowed"
-                    : "bgTheme text-white hover:bg-opacity-80"
-                  }`}
-              >
-                Next
-              </button>
-            </div>
+                          {open && (
+                            <tr className="bg-purple-50/40 dark:bg-gray-900/40">
+                              <td colSpan={10} className="px-4 sm:px-10 py-5">
+                                <div className="bg-white dark:bg-gray-800 rounded-xl border border-purple-100 dark:border-gray-700 p-5">
+                                  <div className="flex flex-wrap items-center justify-between gap-2 pb-3 mb-3 border-b border-gray-100 dark:border-gray-700">
+                                    <h3 className="font-bold text-[#6B21A8] dark:text-purple-300">
+                                      {g.studentName} — Fee Breakdown ({g.year})
+                                    </h3>
+                                    <span className="text-sm text-gray-500 dark:text-gray-400">Scholar No: {g.scholarNo || "—"}</span>
+                                  </div>
+                                  <div className="overflow-x-auto">
+                                    <table className="min-w-full text-sm">
+                                      <thead>
+                                        <tr className="bg-purple-100/70 dark:bg-purple-900/30 text-[#6B21A8] dark:text-purple-300">
+                                          <th className="px-4 py-3 text-left text-xs font-bold uppercase rounded-l-lg">Month</th>
+                                          <th className="px-4 py-3 text-left text-xs font-bold uppercase">Fee Type</th>
+                                          <th className="px-4 py-3 text-right text-xs font-bold uppercase">Total Amount</th>
+                                          <th className="px-4 py-3 text-right text-xs font-bold uppercase">Paid Amount</th>
+                                          <th className="px-4 py-3 text-right text-xs font-bold uppercase">Due Amount</th>
+                                          <th className="px-4 py-3 text-center text-xs font-bold uppercase">Status</th>
+                                          <th className="px-4 py-3 text-center text-xs font-bold uppercase rounded-r-lg">Receipt</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                                        {g.records.map((r) => (
+                                          <tr key={r.id}>
+                                            <td className="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{r.month}</td>
+                                            <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{r.feeType}</td>
+                                            <td className="px-4 py-3 text-right text-gray-800 dark:text-gray-100">{inr(r.totalAmount)}</td>
+                                            <td className="px-4 py-3 text-right text-emerald-600">{inr(r.paidAmount)}</td>
+                                            <td className="px-4 py-3 text-right text-amber-600">{inr(r.dueAmount)}</td>
+                                            <td className="px-4 py-3 text-center">
+                                              <span className={`font-semibold ${r.dueAmount > 0 ? "text-amber-600" : "text-emerald-600"}`}>
+                                                {r.dueAmount > 0 ? "Pending" : "Paid"}
+                                              </span>
+                                            </td>
+                                            <td className="px-4 py-3 text-center">
+                                              {r.receiptNumber && r.studentId ? (
+                                                <Link
+                                                  to={allRouterLink.viewFeesDetails
+                                                    .replace(":id", r.studentId)
+                                                    .replace(":receipt_number", r.receiptNumber)}
+                                                  className="underline textTheme"
+                                                >
+                                                  View
+                                                </Link>
+                                              ) : "—"}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            ) : (
+              <table className="min-w-full">
+                <thead className="bg-[#6B21A8] text-white sticky top-0 z-10">
+                  <tr>
+                    <th className={th}>#</th>
+                    <th className={th}>Receipt No</th>
+                    <th className={th}>Scholar No.</th>
+                    <th className={th}>Student Name</th>
+                    <th className={th}>Class</th>
+                    <th className={th}>Year</th>
+                    <th className={th}>Month</th>
+                    <th className={th}>Fee Type</th>
+                    <th className={th}>Payment Date</th>
+                    <th className={`${th} text-right`}>Total</th>
+                    <th className={`${th} text-right`}>Paid</th>
+                    <th className={`${th} text-right`}>Due</th>
+                    <th className={th}>Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                  {pageItems.length === 0 ? (
+                    <EmptyRow cols={13} hasFilters={hasFilters} onReset={resetFilters} />
+                  ) : (
+                    pageItems.map((r, i) => (
+                      <tr key={r.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
+                        <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{startIndex + i + 1}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-800 dark:text-gray-100">{r.receiptNumber || "—"}</td>
+                        <td className="px-4 py-3 font-mono text-sm text-purple-800 dark:text-purple-300">{r.scholarNo || "—"}</td>
+                        <td className="px-4 py-3 font-semibold whitespace-nowrap text-gray-900 dark:text-gray-100">{r.studentName}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600 dark:text-gray-300">{r.studentClass}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600 dark:text-gray-300">{r.year}</td>
+                        <td className="px-4 py-3 text-gray-800 dark:text-gray-100">{r.month}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600 dark:text-gray-300">{r.feeType}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600 dark:text-gray-300">{r.paymentDate || "—"}</td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap">{inr(r.totalAmount)}</td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap text-emerald-600">{inr(r.paidAmount)}</td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap text-amber-600">{inr(r.dueAmount)}</td>
+                        <td className="px-4 py-3"><StatusBadge status={r.dueAmount > 0 ? "Pending" : "Paid"} /></td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            )}
           </div>
-        )}
+
+          {/* Pagination */}
+          {totalItems > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-4 border-t border-gray-100 dark:border-gray-700">
+              <div className="text-sm text-gray-600 dark:text-gray-300">
+                Showing {startIndex + 1}–{Math.min(startIndex + pageSize, totalItems)} of {totalItems}{" "}
+                {currentView === "summary" ? "students" : "records"}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage(safePage - 1)}
+                  disabled={safePage === 1}
+                  className={`px-4 py-2 rounded border ${safePage === 1 ? "bg-gray-100 dark:bg-gray-700 text-gray-400 cursor-not-allowed" : "bg-[#6B21A8] text-white hover:opacity-90"}`}
+                >
+                  Previous
+                </button>
+                <span className="text-sm text-gray-700 dark:text-gray-300">Page {safePage} of {totalPages}</span>
+                <button
+                  onClick={() => setCurrentPage(safePage + 1)}
+                  disabled={safePage >= totalPages}
+                  className={`px-4 py-2 rounded border ${safePage >= totalPages ? "bg-gray-100 dark:bg-gray-700 text-gray-400 cursor-not-allowed" : "bg-[#6B21A8] text-white hover:opacity-90"}`}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 };
+
+const EmptyRow = ({ cols, hasFilters, onReset }) => (
+  <tr>
+    <td colSpan={cols} className="text-center py-14">
+      <p className="text-gray-500 dark:text-gray-400 text-lg font-medium">No Records Found</p>
+      <p className="text-gray-400 text-sm mt-1">
+        {hasFilters ? "Try adjusting your filters or search criteria" : "No data available to display"}
+      </p>
+      {hasFilters && (
+        <button onClick={onReset} className="mt-4 text-[#6B21A8] text-sm font-medium underline">
+          Clear all filters
+        </button>
+      )}
+    </td>
+  </tr>
+);
 
 export default FeeSummaryTable;
